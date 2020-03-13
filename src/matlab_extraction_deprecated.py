@@ -70,7 +70,7 @@ season = 4*24
 
 '''
 ts = p_diffs_norm[:364*96, :].reshape((-1,))
-with open('zero_change_prediction.csv', 'a') as file:
+with open('zero_change_prediction_10.csv', 'a') as file:
     for yt in ts:
         file.write('{};{}\n'.format(yt, 0))
 
@@ -86,7 +86,7 @@ for i in range(2000, 5000, 10):
     y_predict_season.extend(np.tile(model, 10))
     y_test_season.extend(ts_test)
 
-with open('season_prediction.csv', 'a') as file:
+with open('season_prediction_10.csv', 'a') as file:
     for yt, yp in zip(y_test_season, y_predict_season):
         file.write('{};{}\n'.format(yt, yp))
 
@@ -132,7 +132,7 @@ for i in range(10000, len(ts), n_steps_predict):
     print(r2_score(y_test_arima, y_predict_arima))
     print(mean_squared_error(y_test_arima, y_predict_arima))
 
-    with open('arima_prediction.csv', 'a') as file:
+    with open('arima_prediction_10.csv', 'a') as file:
         for k in range(len(ts_test)):
             file.write('{};{}\n'.format(ts_test[k], prediction[0][k]))
 
@@ -145,7 +145,7 @@ with tf.Session() as sess:
 
     k = TimeSeriesSplit(n_splits=SPLITS)
 
-    with open('lstm_single_iteration.csv', 'a') as iterfile:
+    with open('lstm_single_iteration_10.csv', 'a') as iterfile:
         split_number = 0
         for train_index, test_index in k.split(X):
             sess.run(tf.global_variables_initializer())
