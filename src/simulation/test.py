@@ -1,20 +1,18 @@
 from simulation.Environment import Environment
 from timeseriesprediction.utils import load_total_power_from_mat_file
 import numpy as np
+from ml.EpisodeCreator import EpisodeCreator
+from multiprocessing import Queue
+
+q = Queue(maxsize=10)
 
 power_vals = load_total_power_from_mat_file('loadprofiles_1min.mat')
 p0 = power_vals[:,0]
-
-for i in range(96*7, len(p0), 96*3):
-    mean = np.mean(p0[i-96*7:i])
-    print(mean)
+irradtiation = [300]
 
 
-e = Environment()
-s = e.reset()
-print(s)
 
-for i in range(100):
-    s = e.step(-1000)
-    print(e.storage.stored_energy)
-    print(s)
+for i in range(200):
+    print(i)
+
+

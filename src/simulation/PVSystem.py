@@ -1,11 +1,14 @@
 from simulation.GridParticipant import GridParticipant
 from simulation.simulation_globals import TIME_STEP
+from collections import deque
 
 
 class PVSystem(GridParticipant):
-    def __init__(self, constant_power):
+    def __init__(self, power_ts, kwp):
         super().__init__()
-        self.power = constant_power
+        self.power_ts = deque(power_ts)
+        self.kwp = kwp
 
     def step(self):
-        self.consumed_energy = TIME_STEP * self.power
+        power = self.power_ts.popleft() * self.kwp
+        self.consumed_energy = TIME_STEP * power
