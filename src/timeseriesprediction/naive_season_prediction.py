@@ -5,7 +5,7 @@ from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
 from timeseriesprediction.utils import get_power_differences, standardize_power_differences, load_total_power_from_mat_file
 warnings.simplefilter('ignore', FutureWarning)
 
-power_vals = load_total_power_from_mat_file('loadprofiles_1min.mat')
+power_vals = load_total_power_from_mat_file('../../loadprofiles_1min.mat')
 p_diffs = get_power_differences(power_vals)
 p_diffs_norm,_ ,_ = standardize_power_differences(p_diffs)
 

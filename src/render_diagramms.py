@@ -7,7 +7,7 @@ import pandas as pd
 
 image_folder = '/home/florus/Documents/Uni+/da/latex/images/'
 
-mat_contents = sio.loadmat('loadprofiles_1min.mat')
+mat_contents = sio.loadmat('../../loadprofiles_1min.mat')
 pges_1min = mat_contents['PL1'] + mat_contents['PL2'] + mat_contents['PL3']
 pges = np.mean(np.reshape(pges_1min, (-1,15,74)), axis=1)  #zetiliche Auflüsung verringern
 p_diffs = np.diff(pges, axis=0)

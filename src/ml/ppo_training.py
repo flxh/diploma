@@ -208,8 +208,8 @@ episode_queue = Queue(maxsize=int((N_PROCESS*N_WORKERS_PERPROCESS)))
 action_receive_queues = {}
 batch_buffer = []
 
-load_data = load_total_power_from_mat_file('loadprofiles_1min.mat', 150, 240, [1,  3,  9, 14, 17, 20, 21, 25, 27, 29, 33, 39, 43, 44, 51, 57, 67, 73]) # multiple time series
-irradiation_data = load_irraditaion_data('ihm-daten_20252.csv', 150, 240) *-1
+load_data = load_total_power_from_mat_file('../../loadprofiles_1min.mat', 150, 240, [1,  3,  9, 14, 17, 20, 21, 25, 27, 29, 33, 39, 43, 44, 51, 57, 67, 73]) # multiple time series
+irradiation_data = load_irraditaion_data('../../ihm-daten_20252.csv', 150, 240) *-1
 assert len(load_data) * 5 == len(irradiation_data) * 18
 
 buy_price_data = [0.35]*96

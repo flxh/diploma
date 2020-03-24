@@ -51,7 +51,7 @@ FEATURES = 1
 LR = 5e-4 # up
 SPLITS = 10
 
-power_vals = load_total_power_from_mat_file('loadprofiles_1min.mat')
+power_vals = load_total_power_from_mat_file('../../loadprofiles_1min.mat')
 p_diffs = get_power_differences(power_vals)
 p_diffs_norm, pd_mean, pd_std = standardize_power_differences(p_diffs)
 

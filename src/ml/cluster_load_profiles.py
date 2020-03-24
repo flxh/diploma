@@ -3,7 +3,7 @@ from simulation.simulation_globals import TIME_STEP,JOULES_PER_KWH
 import numpy as np
 from sklearn.cluster import KMeans
 
-power_vals = load_total_power_from_mat_file('loadprofiles_1min.mat')
+power_vals = load_total_power_from_mat_file('../../loadprofiles_1min.mat',0,365)
 energy = power_vals * TIME_STEP
 summed_energy = np.sum(energy, axis=0)/JOULES_PER_KWH
 energy_variance = np.var(energy, axis=0) / JOULES_PER_KWH
