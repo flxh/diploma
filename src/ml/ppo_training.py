@@ -54,7 +54,10 @@ K_EPOCHS = 5
 load_model = False
 tb_verbose = True
 
-model_path = "./model_safe/model_150_test"
+model_path = './model_safe/model_150_test' # leave unchanged !
+
+tensor_board_path = '/home/florus/tb-diplom/' # used to store Tensorboard files
+temp_path = '/tmp/' # used to save trajectory CSV files for each evaluation run
 
 
 class WorkerProcess(Process):
@@ -276,12 +279,12 @@ with tf.Session() as sess:
     t_summary_creator = TrainingSummaryCreator(sess)
 
     experiment_name = "{}-a:{}-lr:{}".format(now.strftime('%Y-%m-%dT%H:%M:%S'), BETA, LR_POLICY)
-    temp_folder = "/tmp/{}".format(experiment_name)
+    temp_folder = temp_path + experiment_name
 
     if not os.path.exists(temp_folder):
         os.makedirs(temp_folder)
 
-    writer = tf.summary.FileWriter("/home/florus/tb-diplom/"+experiment_name, sess.graph)
+    writer = tf.summary.FileWriter(tensor_board_path+experiment_name, sess.graph)
     print(experiment_name)
 
     '''
