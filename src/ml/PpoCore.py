@@ -2,7 +2,7 @@ import tensorflow as tf
 import tensorflow_probability as tfp
 
 GRADIENT_NORM = 5
-CELLS = 100
+CELLS = 110
 TAIL_LEN = 96
 
 STATE_MEAN = tf.constant([ 1.6987270e-01,  3.3652806e+05, -4.7673375e+05])
@@ -12,15 +12,18 @@ STATE_VAR = tf.constant([6.0812939e-02, 1.2899629e+11, 6.3592917e+11])
 
 class Policy:
 
-    def __init__(self, sess, state_size, action_size, lr, alpha_entropy,  epsilon, kernel_reg):
+    def __init__(self, sess, state_size, action_size, lr, beta_entropy, log_var_init, epsilon, kernel_reg):
         self.sess = sess
         self.action_size = action_size
         self.kernel_reg = kernel_reg
+        self.log_var_init = log_var_init
+
+        self.policy_iteration = 0
 
         with tf.variable_scope("Policy"):
             self.state_ph = tf.placeholder(tf.float32, [None, TAIL_LEN, state_size], name="state_ph")
             self.action_ph = tf.placeholder(tf.float32, [None, action_size], name="action_ph")
-            self.advantage_ph = tf.placeholder(tf.float32, [None, 1], name="adavantage_ph")
+            self.advantage_ph = tf.placeholder(tf.float32, [None], name="adavantage_ph")
 
             self.norm_state = tf.nn.batch_normalization(self.state_ph, STATE_MEAN, STATE_VAR, None, None, 1e-12)
             #self.norm_state = self.state_ph
@@ -34,28 +37,31 @@ class Policy:
                 self.pi, self.mean_action = self._create_model(trainable=True, input=self.norm_state, n_cells=CELLS, tail_len=TAIL_LEN)
                 self.pi_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope="Policy/pi")
                 self.sample_op = self.pi.sample()
+                tf.summary.histogram('sampled_actions', self.sample_op)
 
             with tf.variable_scope("old_pi"):
                 self.old_pi, _ = self._create_model(trainable=False, input=self.norm_state, n_cells=CELLS, tail_len=TAIL_LEN)
                 self.old_pi_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope="Policy/old_pi")
 
             with tf.variable_scope("loss"):
-                prob_ratio = self.pi.prob(self.action_ph) / self.old_pi.prob(self.action_ph)
+                prob_ratio = tf.exp(self.pi.log_prob(self.action_ph) - self.old_pi.log_prob(self.action_ph))
                 tf.summary.histogram('prob_ratios', prob_ratio)
 
                 surrogate = prob_ratio * self.norm_advantage
                 clipped_surrogate = tf.minimum(surrogate,  tf.clip_by_value(prob_ratio, 1.-epsilon, 1.+epsilon)*self.norm_advantage)
 
-                probs = self.pi.prob(self.action_ph)
-                self.pi_entropy =  tf.reduce_mean(-probs*tf.log(probs)) # sum over action space then mean
+                self.pi_entropy = tf.reduce_mean(self.pi.entropy())  # sum over action space then mean
 
+                prob = self.pi.prob(self.mean_action)
+                s_entropy = tf.reduce_mean(prob * -tf.log(prob))
 
                 self.surrogate = tf.reduce_mean(clipped_surrogate)
 
                 tf.summary.scalar("entropy", self.pi_entropy)
+                tf.summary.scalar("shannon_entropy", s_entropy)
                 tf.summary.scalar('surrogate', self.surrogate)
 
-                self.loss = -self.surrogate - alpha_entropy * self.pi_entropy # maximise surrogate and entropy
+                self.loss = -self.surrogate - beta_entropy * self.pi_entropy # maximise surrogate and entropy
 
                 tf.summary.scalar("objective", self.loss)
 
@@ -89,7 +95,8 @@ class Policy:
 
         mu = tf.layers.Dense(self.action_size, activation="tanh", name=layer_names[1], trainable=trainable, kernel_initializer = tf.initializers.he_normal(), kernel_regularizer=tf.contrib.layers.l2_regularizer(scale=self.kernel_reg))(output)
 
-        log_sigma = tf.Variable(initial_value=tf.fill((self.action_size,), 0.), trainable=trainable, name="log_sigma")
+        log_sigma = tf.Variable(initial_value=tf.fill((self.action_size,), self.log_var_init), trainable=False, name="log_sigma")
+        #log_sigma = tf.constant([1.])
 
         distribution = tfp.distributions.MultivariateNormalDiag(loc=mu, scale_diag=tf.exp(log_sigma))
 
@@ -108,9 +115,10 @@ class Policy:
         return distribution, mu
 
     def sample_action(self, state):
-        return self.sess.run([self.mean_action, self.sample_op], feed_dict={
+        mean_action, sampled_action =  self.sess.run([self.mean_action, self.sample_op], feed_dict={
             self.state_ph: state
         })
+        return mean_action, sampled_action, self.policy_iteration
 
     def train_policy(self, states, actions, advantages):
         _, summaries =self.sess.run([self.optimize, self.summary_op], feed_dict={
@@ -118,6 +126,7 @@ class Policy:
             self.action_ph: actions,
             self.advantage_ph: advantages
         })
+        self.policy_iteration += 1
         return summaries
 
     def update_old_policy(self):
@@ -125,24 +134,31 @@ class Policy:
 
 
 class StateValueApproximator:
-    def __init__(self, sess, state_size, lr, kernel_reg):
+    def __init__(self, sess, state_size, lr, gamma, kernel_reg):
         self.kernel_reg = kernel_reg
         self.sess = sess
 
+        self.gamma = tf.constant(gamma, dtype=tf.float32)
+
         with tf.variable_scope("V_s"):
-            self.v_target_ph = tf.placeholder(tf.float32, [None, 1])
             self.state_ph = tf.placeholder(tf.float32, [None, TAIL_LEN,state_size])
+            self.next_state_ph = tf.placeholder(tf.float32, [None, TAIL_LEN,state_size])
+            self.reward_ph = tf.placeholder(tf.float32, [None])
 
             self.norm_state = tf.nn.batch_normalization(self.state_ph, STATE_MEAN, STATE_VAR, None, None, 1e-12)
+            self.norm_next_state = tf.nn.batch_normalization(self.next_state_ph, STATE_MEAN, STATE_VAR, None, None, 1e-12)
             #self.norm_state = self.state_ph
 
-            with tf.variable_scope("model"):
+            with tf.variable_scope("model", reuse=None):
                 self.value_output = self._create_model(self.norm_state, CELLS, TAIL_LEN)
+            with tf.variable_scope("model", reuse=True):
+                self.next_value_output = self._create_model(self.norm_next_state, CELLS, TAIL_LEN)
 
-                self.variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope="V_s/model")
+            self.variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope="V_s/model")
+            print(self.variables)
 
             with tf.variable_scope("loss"):
-                self.diff = self.value_output - self.v_target_ph
+                self.diff = self.value_output - self.reward_ph - self.gamma*self.next_value_output
                 self.loss = tf.reduce_mean(tf.square(self.diff))
                 self.loss_summary = tf.summary.scalar("mean_error", tf.reduce_mean(tf.abs(self.diff)))
                 self.mean_predict_summary = tf.summary.scalar("mean_prediction", tf.reduce_mean(self.value_output))
@@ -171,7 +187,7 @@ class StateValueApproximator:
         for i in range(tail_len):
             output, state = lstm(input[:,i,:], state)
 
-        value_output = tf.layers.Dense(1, activation="linear", name=layer_names[1],kernel_initializer = tf.initializers.he_normal(), kernel_regularizer=tf.contrib.layers.l2_regularizer(scale=self.kernel_reg))(output)
+        value_output = tf.layers.Dense(1, activation="linear", name=layer_names[1], kernel_initializer = tf.initializers.he_normal(), kernel_regularizer=tf.contrib.layers.l2_regularizer(scale=self.kernel_reg))(output)
 
         for name in layer_names:
             with tf.variable_scope(name, reuse=True):
@@ -188,10 +204,11 @@ class StateValueApproximator:
             self.state_ph: states
         })
 
-    def train(self, states, v_targets):
+    def train(self, states, rewards, next_states):
         summaries, _ = self.sess.run([self.train_metrics_summaries, self.optimize], feed_dict={
             self.state_ph: states,
-            self.v_target_ph: v_targets
+            self.next_state_ph: next_states,
+            self.reward_ph: rewards
         })
         return summaries
 
