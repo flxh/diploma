@@ -10,10 +10,11 @@ INFO_HEADER = ['SOC', 'LOAD_CONSUM', 'PV_COMSUM', 'STORAGE_CONSUM', 'STORAGE_SCH
 
 
 class Environment:
-    def __init__(self, tail_len, episode_container):
+    def __init__(self, tail_len, episode_container, soc_reward=0):
         self.pv_system = PVSystem(episode_container.pv_ts, KWP)
         self.load = Load(episode_container.load_ts)
         self.storage = Storage(CAPACITY)
+        self.soc_reward = soc_reward
 
         self.buy_price_ts = deque(episode_container.buy_price_ts)
         self.sell_price_ts = deque(episode_container.sell_price_ts)
@@ -37,8 +38,9 @@ class Environment:
         return np.array(self.single_states)
 
     def step(self, action):
+        action = np.clip(action, -1, 1)
         # carry out action
-        self.storage.scheduled_power_ac = action[0] *4000
+        self.storage.scheduled_power_ac = action[0] * 800
         # parts can be stepped and metered in finer steps than RL algorithm to record fluctuations
         ## step all grid parts
         self._step_grid_parts()
@@ -55,7 +57,7 @@ class Environment:
         # prevent drain towards end of episode
         reward += ((sell_price * self.storage.stored_energy / 2) / JOULES_PER_KWH if done else 0)
 
-        scaled_reward = reward / np.sqrt(3e-3)
+        scaled_reward = reward / np.sqrt(3e-3)  -  self.soc_reward * np.abs((2*self.storage.soc() - 1)**3)
 
         #read meters
         #print(self.grid.energy_bought)
