@@ -1,13 +1,13 @@
 import tensorflow as tf
 import tensorflow_probability as tfp
 
-GRADIENT_NORM = 5
-CELLS = 110
+GRADIENT_NORM = 30
+CELLS = 100
 TAIL_LEN = 96
 
-STATE_MEAN = tf.constant([ 1.6987270e-01,  3.3652806e+05, -4.7673375e+05])
+STATE_MEAN = tf.constant([ 1.6987270e-01,  3.3652806e+05, -4.7673375e+05, 0])
 
-STATE_VAR = tf.constant([6.0812939e-02, 1.2899629e+11, 6.3592917e+11])
+STATE_VAR = tf.constant([6.0812939e-02, 1.2899629e+11, 6.3592917e+11, 0.5])
 
 
 class Policy:
@@ -51,14 +51,9 @@ class Policy:
                 clipped_surrogate = tf.minimum(surrogate,  tf.clip_by_value(prob_ratio, 1.-epsilon, 1.+epsilon)*self.norm_advantage)
 
                 self.pi_entropy = tf.reduce_mean(self.pi.entropy())  # sum over action space then mean
-
-                prob = self.pi.prob(self.mean_action)
-                s_entropy = tf.reduce_mean(prob * -tf.log(prob))
-
                 self.surrogate = tf.reduce_mean(clipped_surrogate)
 
                 tf.summary.scalar("entropy", self.pi_entropy)
-                tf.summary.scalar("shannon_entropy", s_entropy)
                 tf.summary.scalar('surrogate', self.surrogate)
 
                 self.loss = -self.surrogate - beta_entropy * self.pi_entropy # maximise surrogate and entropy
@@ -70,7 +65,9 @@ class Policy:
                 self.gradients = [tf.clip_by_value(g, -1, 1) for g in self.gradients]
                 self.gradients, _ = tf.clip_by_global_norm(self.gradients, GRADIENT_NORM)
                 grads = zip(self.gradients, self.pi_vars)
-                self.optimize = tf.train.AdamOptimizer(lr).apply_gradients(grads)
+                optimizer = tf.train.RMSPropOptimizer(lr)
+
+                self.optimize = optimizer.apply_gradients(grads)
 
                 clipped_grads_tb = [tf.clip_by_value(g, -1e-8, 1e-8) for g in self.gradients]
 
@@ -164,7 +161,7 @@ class StateValueApproximator:
                 self.mean_predict_summary = tf.summary.scalar("mean_prediction", tf.reduce_mean(self.value_output))
 
             with tf.variable_scope("training"):
-                self.optimizer = tf.train.AdamOptimizer(lr)
+                self.optimizer = tf.train.RMSPropOptimizer(lr)
                 self.grads = tf.gradients(self.loss, self.variables)
                 # self.grads = [tf.clip_by_value(g, -1, 1) for g in self.grads]
                 #self.clipped_grads, _ = tf.clip_by_global_norm(self.grads, GRADIENT_NORM)
@@ -172,6 +169,7 @@ class StateValueApproximator:
                 grad_var_pairs = zip(self.grads, self.variables)
 
                 self.optimize = self.optimizer.apply_gradients(grad_var_pairs)
+
 
         self.summaries = tf.summary.merge_all(scope="V_s/model")
         self.train_metrics_summaries = tf.summary.merge([self.loss_summary, self.mean_predict_summary])

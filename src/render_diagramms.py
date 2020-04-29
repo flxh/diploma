@@ -4,10 +4,12 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import r2_score, mean_squared_error
 from datetime import datetime
 import pandas as pd
+import pickle as pkl
 
 image_folder = '/home/florus/Documents/Uni+/da/latex/images/'
 
-mat_contents = sio.loadmat('../../loadprofiles_1min.mat')
+
+mat_contents = sio.loadmat('../loadprofiles_1min.mat')
 pges_1min = mat_contents['PL1'] + mat_contents['PL2'] + mat_contents['PL3']
 pges = np.mean(np.reshape(pges_1min, (-1,15,74)), axis=1)  #zetiliche Auflüsung verringern
 p_diffs = np.diff(pges, axis=0)
@@ -20,6 +22,26 @@ datevecs = mat_contents['time_datevec_MEZ']
 date_times_1min = np.array([datetime(x[0], x[1], x[2], x[3], x[4], x[5]) for x in datevecs])
 date_times = date_times_1min[range(0, len(date_times_1min), 15)]
 
+clusters = pkl.load(open('clusters.pkl', 'rb'))
+
+fig1, ax1 = plt.subplots(1, 1, figsize=(4, 4))
+for c in clusters:
+    ax1.scatter(c[:,0], c[:,1])
+ax1.set_ylabel('Var(P) (Normalisiert)')
+ax1.set_xlabel('Jahresverbrauch (Normalisiert)')
+#plt.show()
+#plt.tight_layout()
+plt.savefig(image_folder+"cluster_plot.pdf")
+plt.close(fig1)
+
+fig1, ax1 = plt.subplots(1, 1, figsize=(4, 4))
+x = np.linspace(0.,1., 200)
+ax1.plot(x, (2*x-1)**2)
+ax1.set_ylabel('Regularisierung / $\\alpha_{SOC}$')
+ax1.set_xlabel('SOC')
+#plt.show()
+plt.savefig(image_folder+"soc_regularization.pdf")
+plt.close(fig1)
 
 fig1, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 3.5))
 

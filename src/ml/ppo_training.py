@@ -1,21 +1,22 @@
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
+
 from datetime import datetime
 import numpy as np
 import random
 from time import time
 from multiprocessing import Process, Queue
 import os
-import matplotlib
+import matplotlib.pyplot as plt
 #matplotlib.use('Agg')
 from threading import Thread
+import pickle as pkl
 
 from ml.EpisodeCreator import EpisodeCreator
 from ml.TBTrainingLogger import TrainingSummaryCreator
-from ml.utils import drain
 from ml.PpoCore import Policy, StateValueApproximator
 from simulation.Environment import Environment, INFO_HEADER
 from timeseriesprediction.utils import load_total_power_from_mat_file
-from ml.utils import load_irraditaion_data
+from ml.utils import load_irraditaion_data, LinearScheduler
 from ml.TBStateLogger import StateLogger
 
 from traceback import print_exc
@@ -25,19 +26,16 @@ random.seed(2)
 np.random.seed(2)
 
 # HYPERPARAMETERS
-BATCH_SIZE = 8192
-#HORIZON = 16#64
-#N_WORKERS_PERPROCESS = 64
-#N_PROCESS = 8
-#MIN_WORKERS_DONE = 8
+BATCH_SIZE = 4096
 
-N_WORKERS = 512
+N_WORKERS = 256
 ENV_STEPS = 256
 
 TAIL_LEN = 96
-EPISODE_LEN = 29
 
-SOC_REGULARIZATION = 4.0
+SOC_REGULARIZATION = 2.5
+SOC_REG_SCHEDULER = LinearScheduler(2.5, 1.6, 16e6)
+SOC_REG_SCHEDULER.x = 0
 
 BETA = 0.0
 LR_POLICY = 3e-5
@@ -46,49 +44,31 @@ LR_VS = 1e-4
 # These hyperparameters can be left as they are
 KERNEL_REG = 1e-5
 EPSILON = 0.2 # KL-Divergence Clipping as per recommendation
-GAMMA = 0.9
-LAMBDA = 0.95
-LOG_VAR_INIT = -0.8
+GAMMA = 0.995
+LAMBDA = 0.98
+LOG_VAR_INIT = -0.5
 
-K_EPOCHS = 5
+DT_WORKER_STEP = 180
+DT_EVAL_STEP = 60
+
+WORKER_STEPS_PER_DAY = 20*24
+EVAL_STEPS_PER_ACTION = 15
+WORKER_STEPS_PER_ACTION = 5
+WORKER_EPISODE_STEPS = 47 * WORKER_STEPS_PER_DAY
+
+K_EPOCHS = 6
+K_EPOCHS_VS = 4
+
+
 load_model = False
 tb_verbose = True
+
+if load_model: print('LOADING MODEL')
 
 model_path = './model_safe/model_150_test' # leave unchanged !
 
 tensor_board_path = '/home/florus/tb-diplom/' # used to store Tensorboard files
 temp_path = '/tmp/' # used to save trajectory CSV files for each evaluation run
-
-
-class WorkerProcess(Process):
-
-    def __init__(self, state_send_queue, action_receive_queue, workers, id):
-        Process.__init__(self)
-        self.state_send = state_send_queue
-        self.action_receive = action_receive_queue
-
-        self.workers = workers
-        self.id = id
-        self.current_policy_iteration = -1
-
-    def run(self):
-        while True:
-            states = [w.state for w in self.workers]
-            self.state_send.put((self.id, states))
-            actions, policy_iteration = self.action_receive.get()
-
-            # dropping old transitions collected from old policy iteration, because PPO assumes that all transitions
-            # for training are collected under current policy
-            if policy_iteration != self.current_policy_iteration:
-                n_dropped = 0
-                for w in self.workers:
-                    n_dropped += len(w.temp_buffer)
-                    w.temp_buffer = []
-                print('{} transitions dropped from proc {}; {} -> {}'.format(n_dropped, self.id, self.current_policy_iteration, policy_iteration))
-                self.current_policy_iteration = policy_iteration
-
-            for a, w in zip(actions, self.workers):
-                w.step(a)
 
 
 class Worker:
@@ -101,13 +81,12 @@ class Worker:
         self.state = None
 
         self.done = False
-
         self.start_episode()
         self.episode_reward = 0
 
     def start_episode(self):
         episode_container = self.episode_queue.get()
-        self.env = Environment(TAIL_LEN, episode_container, soc_reward=SOC_REGULARIZATION)
+        self.env = Environment(TAIL_LEN, episode_container, DT_WORKER_STEP,soc_reward=SOC_REG_SCHEDULER.get_schedule_value(), soc_initial=np.random.random(), sim_steps_per_action=WORKER_STEPS_PER_ACTION)
 
         self.temp_buffer = []
         self.episode_reward = 0
@@ -151,8 +130,11 @@ def calculate_gae(transitions, vs):
     rewards = np.reshape([s[2] for s in transitions], [-1 ,1])
     next_states = np.array([s[3] for s in transitions])
 
-    state_values, _ = vs.predict(states)
-    next_state_values, _ = vs.predict(next_states)
+    stacked_states = np.vstack((states, next_states))
+    stacked_values, _ = vs.predict(stacked_states)
+
+    state_values = stacked_values[:len(states)]
+    next_state_values = stacked_values[len(states):]
 
     td_residuals = rewards + GAMMA * next_state_values - state_values
 
@@ -198,7 +180,8 @@ class Evaluation:
         self.single_evalutation(baseline_run=True)
 
     def single_evalutation(self, baseline_run=False):
-        env = Environment(TAIL_LEN, self.episode_container)
+        print('starting evaluation run')
+        env = Environment(TAIL_LEN, self.episode_container, DT_EVAL_STEP, sim_steps_per_action=EVAL_STEPS_PER_ACTION)
         state = env.reset()
         done = False
         rewards = []
@@ -239,46 +222,44 @@ class Evaluation:
         print('Five failed attempts. Exiting')
 
 
-state_send_queue = Queue()
-transition_queue = Queue()
 episode_queue = Queue(maxsize=N_WORKERS)
-action_receive_queues = {}
 batch_buffer = []
 horizon_buffer = []
 
+load_data = load_total_power_from_mat_file('../../loadprofiles_1min.mat', 0, 365, [1, 11, 17, 25, 26, 27, 29, 44, 46, 47, 51, 54, 56, 57, 59, 60, 66, 67, 70, 71, 72, 73]) # multiple time series
+irradiation_data = load_irraditaion_data('../../ihm-daten_20252.csv', 0, 365) *-1
+assert len(load_data) * 5 == len(irradiation_data) * 22
 
-load_data = load_total_power_from_mat_file('../../loadprofiles_1min.mat', 150, 240, [1,  3,  9, 14, 17, 20, 21, 25, 27, 29, 33, 39, 43, 44, 51, 57, 67, 73]) # multiple time series
-irradiation_data = load_irraditaion_data('../../ihm-daten_20252.csv', 150, 240) *-1
-assert len(load_data) * 5 == len(irradiation_data) * 18
-
-# buy_price_data = [0.35]*96
-# sell_price_data = [0.09]*96
-
-buy_price_data = [1.]*96
-sell_price_data = [0.]*96
+year_cycle = [-np.cos(((x+WORKER_STEPS_PER_DAY*10)/(WORKER_STEPS_PER_DAY*365))*2*np.pi) for x in range(WORKER_STEPS_PER_DAY*365)]
+buy_price_data = [1.]*WORKER_STEPS_PER_DAY
+sell_price_data = [0.]*WORKER_STEPS_PER_DAY
 
 print('start episode loader')
-episode_loader = EpisodeCreator(episode_queue, load_data, irradiation_data, buy_price_data, sell_price_data, EPISODE_LEN)
-episode_proc = Process(target=episode_loader.fill_queue, name="episode_loader")
+episode_loader = EpisodeCreator(episode_queue, load_data, irradiation_data, year_cycle, buy_price_data, sell_price_data)
+episode_proc = Process(target=episode_loader.fill_queue, args=(WORKER_EPISODE_STEPS,), name="episode_loader")
 episode_proc.start()
 
-eval_episode = episode_loader.create_evaluation_episode(180)
+eval_episode = pkl.load(open('eval_episode.pkl', 'rb'))
 
-state_dim = 3
+plt.plot(range(2*365*WORKER_STEPS_PER_DAY), load_data[:2*365*WORKER_STEPS_PER_DAY])
+plt.plot(range(2*365*WORKER_STEPS_PER_DAY), irradiation_data[:2*365*WORKER_STEPS_PER_DAY])
+plt.show()
+
+state_dim = 4
 action_dim = 1
 
-
-
-with tf.Session() as sess:
+config = tf.ConfigProto()
+#config.gpu_options.per_process_gpu_memory_fraction = 0.80
+with tf.Session(config=config) as sess:
     now = datetime.now()
 
     vs = StateValueApproximator(sess, state_dim, LR_VS, GAMMA, KERNEL_REG)
     pol = Policy(sess, state_dim, action_dim, LR_POLICY, BETA, LOG_VAR_INIT, EPSILON, KERNEL_REG)
-    state_logger = StateLogger(sess, ['SOC', 'LOAD', 'PV'], "state")
-    state_logger_norm = StateLogger(sess,  ['SOC', 'LOAD', 'PV'], "norm_state")
+    state_logger = StateLogger(sess, ['SOC', 'LOAD', 'PV', 'CYCLE'], "state")
+    state_logger_norm = StateLogger(sess,  ['SOC', 'LOAD', 'PV', 'CYCLE'], "norm_state")
     t_summary_creator = TrainingSummaryCreator(sess)
 
-    experiment_name = "{}-a:{}-lr:{}".format(now.strftime('%Y-%m-%dT%H:%M:%S'), BETA, LR_POLICY)
+    experiment_name = "{}-a:{}-lr:{}-sr:{}".format(now.strftime('%Y-%m-%dT%H:%M:%S'), BETA, LR_POLICY, SOC_REGULARIZATION)
     temp_folder = temp_path + experiment_name
 
     if not os.path.exists(temp_folder):
@@ -287,23 +268,14 @@ with tf.Session() as sess:
     writer = tf.summary.FileWriter(tensor_board_path+experiment_name, sess.graph)
     print(experiment_name)
 
-    '''
-    print('build workers')
-    for p_id in range(N_PROCESS):
-        workers = [Worker(episode_queue, transition_queue) for _ in range(N_WORKERS_PERPROCESS)]
-
-        action_receive_queue = Queue()
-        action_receive_queues[p_id] = action_receive_queue
-        wp = WorkerProcess(state_send_queue, action_receive_queue, workers, p_id)
-        wp.start()
-    '''
-
     workers = [Worker(episode_queue) for _ in range(N_WORKERS)]
-
+    print('wokers created')
     evaluator = Evaluation(eval_episode, pol, sess, writer, temp_folder)
+    print('evaluator created')
 
     init = tf.group(tf.global_variables_initializer(), tf.local_variables_initializer())
     sess.run(init)
+    print('models initialized')
 
     saver = tf.train.Saver()
     if load_model:
@@ -312,9 +284,9 @@ with tf.Session() as sess:
     n_transitions = 0
     i_policy_iter = 0
 
+    print('start training')
     t_eval = Thread(target=evaluator.run_evaluation)
     t_eval.start()
-    print('start training')
     last_time = time()
     while True:
 
@@ -337,35 +309,16 @@ with tf.Session() as sess:
             if w.temp_buffer:
                 horizon_buffer.append(w.temp_buffer)
             w.temp_buffer = []
-        '''
-        for _ in range(MIN_WORKERS_DONE):
-            q_item = state_send_queue.get()
-            states.extend(q_item[1])
-            process_order.append(q_item[0])
 
-        for q_item in drain(state_send_queue):
-            states.extend(q_item[1])
-            process_order.append(q_item[0])
-
-        # sample action
-        _, actions, policy_iteration = pol.sample_action(states)
-
-        # send actions to worker processes
-        for idx, proc in enumerate(process_order):
-            process_idx_start = idx*N_WORKERS_PERPROCESS
-            process_idx_end = (idx+1)*N_WORKERS_PERPROCESS
-            action_receive_queues[proc].put((actions[process_idx_start:process_idx_end], policy_iteration))
-        '''
-
-        total_transitions = 0
+        total_transitions_training = 0
 
         # calculate gae values from transitions and extend training buffer
         for transitions in horizon_buffer:
-            total_transitions += len(transitions)
+            total_transitions_training += len(transitions)
             gae_vals = calculate_gae(transitions, vs)
             batch_buffer.extend(np.concatenate((transitions, gae_vals), axis=1))
 
-        print('Average horizon length ', total_transitions / len(horizon_buffer))
+        print('Average horizon length ', total_transitions_training / len(horizon_buffer))
         horizon_buffer = []
 
         if len(batch_buffer) >= BATCH_SIZE:
@@ -378,7 +331,7 @@ with tf.Session() as sess:
             v_summaries = None
             batch_end = None
 
-            for _ in range(K_EPOCHS):
+            for i_epoch in range(K_EPOCHS):
                 for i_batch in range(int(np.ceil(len(batch_buffer) / BATCH_SIZE))):
                     batch_start = i_batch * BATCH_SIZE
                     batch_end = min((i_batch + 1) * BATCH_SIZE, len(batch_buffer))
@@ -389,26 +342,29 @@ with tf.Session() as sess:
                         np.stack(batch_buffer[batch_start:batch_end, 1], axis=0),
                         np.stack(batch_buffer[batch_start:batch_end, 4], axis=0)
                     )
-
-                    v_summaries = vs.train(
-                        np.stack(batch_buffer[batch_start:batch_end, 0], axis=0),
-                        np.stack(batch_buffer[batch_start:batch_end, 2], axis=0),
-                        np.stack(batch_buffer[batch_start:batch_end, 3], axis=0)
-                    )
-
                     writer.add_summary(pol_summaries, i_policy_iter)
-                    writer.add_summary(v_summaries, i_policy_iter)
 
-            print(len(batch_buffer) - batch_end, ' / ', len(batch_buffer))
+                    if i_epoch < K_EPOCHS_VS:
+                        v_summaries = vs.train(
+                            np.stack(batch_buffer[batch_start:batch_end, 0], axis=0),
+                            np.stack(batch_buffer[batch_start:batch_end, 2], axis=0),
+                            np.stack(batch_buffer[batch_start:batch_end, 3], axis=0)
+                        )
+                        writer.add_summary(v_summaries, i_policy_iter)
 
             writer.add_summary(state_logger.log(np.stack(batch_buffer[:, 3], axis=0)), i_policy_iter)
             #writer.add_summary(state_logger_norm.log(norm_next_state), i_epochs)
             time_now = time()
             writer.add_summary(t_summary_creator.create_summary(np.reshape(batch_buffer[:, 2], [-1]), time_now - last_time), n_transitions)
             last_time = time_now
+            SOC_REG_SCHEDULER.x = n_transitions
 
-            if i_policy_iter % 1000 < K_EPOCHS:
-                saver.save(sess, model_path)
+            print('Total Transitions:  ', n_transitions)
+            print('SOC regularization: ', SOC_REG_SCHEDULER.get_schedule_value())
+            print('Transitions wasted: ',len(batch_buffer) - batch_end, ' / ', len(batch_buffer))
+
+            print('Save model')
+            saver.save(sess, model_path)
 
             pol.update_old_policy()
             batch_buffer = []
