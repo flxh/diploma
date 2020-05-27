@@ -76,7 +76,7 @@ class Environment:
         # prevent drain towards end of episode
         reward += ((sell_price * self.storage.stored_energy / 2) / JOULES_PER_KWH if done else 0)
 
-        scaled_reward = reward / np.sqrt(3e-3)  -  self.soc_reward * np.abs((2*self.storage.soc() - 1)**2)
+        scaled_reward = reward / np.sqrt(3e-3)  -  self.soc_reward * np.abs((2*self.storage.soc() - 1))
 
         #reset meter for next environment step
 

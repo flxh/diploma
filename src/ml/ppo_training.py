@@ -1,5 +1,6 @@
 import tensorflow.compat.v1 as tf
 
+
 from datetime import datetime
 import numpy as np
 import random
@@ -33,13 +34,12 @@ ENV_STEPS = 256
 
 TAIL_LEN = 96
 
-SOC_REGULARIZATION = 2.5
-SOC_REG_SCHEDULER = LinearScheduler(2.5, 1.6, 16e6)
+SOC_REG_SCHEDULER = LinearScheduler(2., 2., 30e6)
 SOC_REG_SCHEDULER.x = 0
 
 BETA = 0.0
-LR_POLICY = 3e-5
-LR_VS = 1e-4
+LR_POLICY = 5e-5
+LR_VS = 8e-5
 
 # These hyperparameters can be left as they are
 KERNEL_REG = 1e-5
@@ -52,6 +52,7 @@ DT_WORKER_STEP = 180
 DT_EVAL_STEP = 60
 
 WORKER_STEPS_PER_DAY = 20*24
+
 EVAL_STEPS_PER_ACTION = 15
 WORKER_STEPS_PER_ACTION = 5
 WORKER_EPISODE_STEPS = 47 * WORKER_STEPS_PER_DAY
@@ -65,7 +66,7 @@ tb_verbose = True
 
 if load_model: print('LOADING MODEL')
 
-model_path = './model_safe/model_150_test' # leave unchanged !
+model_path = './model_safe/model_1501_test' # leave unchanged !
 
 tensor_board_path = '/home/florus/tb-diplom/' # used to store Tensorboard files
 temp_path = '/tmp/' # used to save trajectory CSV files for each evaluation run
@@ -221,11 +222,12 @@ class Evaluation:
                 print("Error during evaluation run")
         print('Five failed attempts. Exiting')
 
-
+# initialization of the buffers and the episode queue
 episode_queue = Queue(maxsize=N_WORKERS)
 batch_buffer = []
 horizon_buffer = []
 
+#load time series data
 load_data = load_total_power_from_mat_file('../../loadprofiles_1min.mat', 0, 365, [1, 11, 17, 25, 26, 27, 29, 44, 46, 47, 51, 54, 56, 57, 59, 60, 66, 67, 70, 71, 72, 73]) # multiple time series
 irradiation_data = load_irraditaion_data('../../ihm-daten_20252.csv', 0, 365) *-1
 assert len(load_data) * 5 == len(irradiation_data) * 22
@@ -234,16 +236,13 @@ year_cycle = [-np.cos(((x+WORKER_STEPS_PER_DAY*10)/(WORKER_STEPS_PER_DAY*365))*2
 buy_price_data = [1.]*WORKER_STEPS_PER_DAY
 sell_price_data = [0.]*WORKER_STEPS_PER_DAY
 
+#start episode loader
 print('start episode loader')
 episode_loader = EpisodeCreator(episode_queue, load_data, irradiation_data, year_cycle, buy_price_data, sell_price_data)
 episode_proc = Process(target=episode_loader.fill_queue, args=(WORKER_EPISODE_STEPS,), name="episode_loader")
 episode_proc.start()
 
 eval_episode = pkl.load(open('eval_episode.pkl', 'rb'))
-
-plt.plot(range(2*365*WORKER_STEPS_PER_DAY), load_data[:2*365*WORKER_STEPS_PER_DAY])
-plt.plot(range(2*365*WORKER_STEPS_PER_DAY), irradiation_data[:2*365*WORKER_STEPS_PER_DAY])
-plt.show()
 
 state_dim = 4
 action_dim = 1
@@ -259,7 +258,7 @@ with tf.Session(config=config) as sess:
     state_logger_norm = StateLogger(sess,  ['SOC', 'LOAD', 'PV', 'CYCLE'], "norm_state")
     t_summary_creator = TrainingSummaryCreator(sess)
 
-    experiment_name = "{}-a:{}-lr:{}-sr:{}".format(now.strftime('%Y-%m-%dT%H:%M:%S'), BETA, LR_POLICY, SOC_REGULARIZATION)
+    experiment_name = "{}-a:{}-lr:{}-sr:{}".format(now.strftime('%Y-%m-%dT%H:%M:%S'), BETA, LR_POLICY, SOC_REG_SCHEDULER.get_schedule_value())
     temp_folder = temp_path + experiment_name
 
     if not os.path.exists(temp_folder):
