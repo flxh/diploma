@@ -10,5 +10,5 @@ setup(
     author='Florus Härtel',
     author_email='',
     description='',
-    install_requires=['tensorflow==1.14', 'numpy', 'scipy', 'scikit-learn', 'matplotlib', 'pandas', 'tensorflow-probability==0.7']
+    install_requires=['tensorflow==1.15', 'numpy', 'scipy', 'scikit-learn', 'matplotlib', 'pandas', 'tensorflow-probability==0.7']
 )
