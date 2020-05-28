@@ -34,7 +34,7 @@ ENV_STEPS = 256
 
 TAIL_LEN = 96
 
-SOC_REG_SCHEDULER = LinearScheduler(2., 2., 30e6)
+SOC_REG_SCHEDULER = LinearScheduler(3., 3., 30e6)
 SOC_REG_SCHEDULER.x = 0
 
 BETA = 0.0
@@ -242,7 +242,7 @@ episode_loader = EpisodeCreator(episode_queue, load_data, irradiation_data, year
 episode_proc = Process(target=episode_loader.fill_queue, args=(WORKER_EPISODE_STEPS,), name="episode_loader")
 episode_proc.start()
 
-eval_episode = pkl.load(open('eval_episode.pkl', 'rb'))
+eval_episode = pkl.load(open('../../eval_episode.pkl', 'rb'))
 
 state_dim = 4
 action_dim = 1
