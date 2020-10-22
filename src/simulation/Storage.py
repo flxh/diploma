@@ -1,32 +1,24 @@
 from simulation.GridParticipant import GridParticipant
+from abc import abstractmethod
 
 EFFICIENCY = 0.94
 
 class Storage(GridParticipant):
     def __init__(self, capacity, soc_initial, dt_step):
-        super().__init__()
+        super().__init__(dt_step=dt_step)
         self.capacity = capacity
         self.stored_energy = capacity * soc_initial
         self.scheduled_power_ac = 0
         self.actual_power = None
 
-        self.dt_step = dt_step
-
     def soc(self):
         return self.stored_energy / self.capacity
 
+    @abstractmethod
     def step(self):
-        # charge
-        if self.scheduled_power_ac > 0:
-            scheduled_power_dc = self.scheduled_power_ac * EFFICIENCY
-            # charge with scheduled power or charge left capacity
-            actual_power_dc = min(scheduled_power_dc, (self.capacity - self.stored_energy)/self.dt_step)
-            actual_power_ac = actual_power_dc / EFFICIENCY
-        # discharge
-        else:
-            scheduled_power_dc = self.scheduled_power_ac / EFFICIENCY
-            actual_power_dc = max(scheduled_power_dc, (0 - self.stored_energy)/self.dt_step)
-            actual_power_ac = actual_power_dc * EFFICIENCY
-
-        self.stored_energy += actual_power_dc * self.dt_step
-        self.consumed_energy = actual_power_ac *self.dt_step
+        '''
+        updates internal state of each grid part
+        This method must update consumed_energy
+        :return:
+        '''
+        pass

@@ -1,0 +1,7 @@
+tensorflow-gpu==1.15
+tensorflow-probability==0.7
+numpy
+scipy
+scikit-learn
+matplotlib
+pandas

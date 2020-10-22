@@ -1,6 +1,6 @@
 import tensorflow.compat.v1 as tf
 
-
+import sys
 from datetime import datetime
 import numpy as np
 import random
@@ -22,6 +22,7 @@ from ml.TBStateLogger import StateLogger
 
 from traceback import print_exc
 
+print(sys.argv)
 
 random.seed(2)
 np.random.seed(2)
@@ -60,17 +61,27 @@ WORKER_EPISODE_STEPS = 47 * WORKER_STEPS_PER_DAY
 K_EPOCHS = 6
 K_EPOCHS_VS = 4
 
+# TODO SET RUN ID
+RUN_ID = 1
+
+ws_prefix = "E:/workspace/"
 
 load_model = False
 tb_verbose = True
 
 if load_model: print('LOADING MODEL')
 
-model_path = './model_safe/model_1501_test' # leave unchanged !
+#model_path = '/workspace/models/' # leave unchanged !
+#tensor_board_path = '/workspace/tensorboard/' # used to store Tensorboard files
+#temp_path = '/workspace/trajectories/' # used to save trajectory CSV files for each evaluation run
 
-tensor_board_path = '/home/florus/tb-diplom/' # used to store Tensorboard files
-temp_path = '/tmp/' # used to save trajectory CSV files for each evaluation run
+model_path = r"E:\\workspace\\models\\"
+tensor_board_path = r'E:\\workspace\\tensorboard\\' # used to store Tensorboard files
+temp_path = r'E:\\workspace\\trajectories\\' # used to save trajectory CSV files for each evaluation run
 
+for p in [model_path, tensor_board_path, temp_path]:
+    if not os.path.exists(p) or not os.path.isdir(p):
+        raise IOError(f"Workspace dir {p} does not exist.\nIs /workspace mounted? Are subdirectories created?")
 
 class Worker:
     def __init__(self, episode_queue):
@@ -222,148 +233,151 @@ class Evaluation:
                 print("Error during evaluation run")
         print('Five failed attempts. Exiting')
 
-# initialization of the buffers and the episode queue
-episode_queue = Queue(maxsize=N_WORKERS)
-batch_buffer = []
-horizon_buffer = []
+if __name__ == '__main__':
+    # initialization of the buffers and the episode queue
+    episode_queue = Queue(maxsize=N_WORKERS)
+    batch_buffer = []
+    horizon_buffer = []
 
-#load time series data
-load_data = load_total_power_from_mat_file('../../loadprofiles_1min.mat', 0, 365, [1, 11, 17, 25, 26, 27, 29, 44, 46, 47, 51, 54, 56, 57, 59, 60, 66, 67, 70, 71, 72, 73]) # multiple time series
-irradiation_data = load_irraditaion_data('../../ihm-daten_20252.csv', 0, 365) *-1
-assert len(load_data) * 5 == len(irradiation_data) * 22
+    #load time series data
+    load_data = load_total_power_from_mat_file('../../loadprofiles_1min.mat', 0, 365, [1, 11, 17, 25, 26, 27, 29, 44, 46, 47, 51, 54, 56, 57, 59, 60, 66, 67, 70, 71, 72, 73]) # multiple time series
+    irradiation_data = load_irraditaion_data('../../ihm-daten_20252.csv', 0, 365) *-1
+    assert len(load_data) * 5 == len(irradiation_data) * 22
 
-year_cycle = [-np.cos(((x+WORKER_STEPS_PER_DAY*10)/(WORKER_STEPS_PER_DAY*365))*2*np.pi) for x in range(WORKER_STEPS_PER_DAY*365)]
-buy_price_data = [1.]*WORKER_STEPS_PER_DAY
-sell_price_data = [0.]*WORKER_STEPS_PER_DAY
+    year_cycle = [-np.cos(((x+WORKER_STEPS_PER_DAY*10)/(WORKER_STEPS_PER_DAY*365))*2*np.pi) for x in range(WORKER_STEPS_PER_DAY*365)]
+    buy_price_data = [1.]*WORKER_STEPS_PER_DAY
+    sell_price_data = [0.]*WORKER_STEPS_PER_DAY
 
-#start episode loader
-print('start episode loader')
-episode_loader = EpisodeCreator(episode_queue, load_data, irradiation_data, year_cycle, buy_price_data, sell_price_data)
-episode_proc = Process(target=episode_loader.fill_queue, args=(WORKER_EPISODE_STEPS,), name="episode_loader")
-episode_proc.start()
+    #start episode loader
+    print('start episode loader')
+    episode_loader = EpisodeCreator(episode_queue, load_data, irradiation_data, year_cycle, buy_price_data, sell_price_data)
+    episode_proc = Process(target=episode_loader.fill_queue, args=(WORKER_EPISODE_STEPS,), name="episode_loader")
+    episode_proc.start()
 
-eval_episode = pkl.load(open('../../eval_episode.pkl', 'rb'))
+    eval_episode = pkl.load(open('../../eval_episode.pkl', 'rb'))
 
-state_dim = 4
-action_dim = 1
+    state_dim = 4
+    action_dim = 1
 
-config = tf.ConfigProto()
-#config.gpu_options.per_process_gpu_memory_fraction = 0.80
-with tf.Session(config=config) as sess:
-    now = datetime.now()
+    config = tf.ConfigProto()
+    #config.gpu_options.per_process_gpu_memory_fraction = 0.80
+    with tf.Session(config=config) as sess:
+        now = datetime.now()
 
-    vs = StateValueApproximator(sess, state_dim, LR_VS, GAMMA, KERNEL_REG)
-    pol = Policy(sess, state_dim, action_dim, LR_POLICY, BETA, LOG_VAR_INIT, EPSILON, KERNEL_REG)
-    state_logger = StateLogger(sess, ['SOC', 'LOAD', 'PV', 'CYCLE'], "state")
-    state_logger_norm = StateLogger(sess,  ['SOC', 'LOAD', 'PV', 'CYCLE'], "norm_state")
-    t_summary_creator = TrainingSummaryCreator(sess)
+        vs = StateValueApproximator(sess, state_dim, LR_VS, GAMMA, KERNEL_REG)
+        pol = Policy(sess, state_dim, action_dim, LR_POLICY, BETA, LOG_VAR_INIT, EPSILON, KERNEL_REG)
+        state_logger = StateLogger(sess, ['SOC', 'LOAD', 'PV', 'CYCLE'], "state")
+        state_logger_norm = StateLogger(sess,  ['SOC', 'LOAD', 'PV', 'CYCLE'], "norm_state")
+        t_summary_creator = TrainingSummaryCreator(sess)
 
-    experiment_name = "{}-a:{}-lr:{}-sr:{}".format(now.strftime('%Y-%m-%dT%H:%M:%S'), BETA, LR_POLICY, SOC_REG_SCHEDULER.get_schedule_value())
-    temp_folder = temp_path + experiment_name
+        # TODO WRITE META DATA RUNID -> HYPERPARAMS
+        #experiment_name = "{}-a{}-lr{}-sr{}".format(now.strftime('%Y-%m-%dT%H%M%S'), BETA, LR_POLICY, SOC_REG_SCHEDULER.get_schedule_value())
+        temp_folder = temp_path + f"{RUN_ID}"
 
-    if not os.path.exists(temp_folder):
-        os.makedirs(temp_folder)
+        if not os.path.exists(temp_folder):
+            os.makedirs(temp_folder)
 
-    writer = tf.summary.FileWriter(tensor_board_path+experiment_name, sess.graph)
-    print(experiment_name)
+        writer = tf.summary.FileWriter(tensor_board_path+f"{RUN_ID}", sess.graph)
+        # print("RUN META")
+        print(RUN_ID)
 
-    workers = [Worker(episode_queue) for _ in range(N_WORKERS)]
-    print('wokers created')
-    evaluator = Evaluation(eval_episode, pol, sess, writer, temp_folder)
-    print('evaluator created')
+        workers = [Worker(episode_queue) for _ in range(N_WORKERS)]
+        print('wokers created')
+        evaluator = Evaluation(eval_episode, pol, sess, writer, temp_folder)
+        print('evaluator created')
 
-    init = tf.group(tf.global_variables_initializer(), tf.local_variables_initializer())
-    sess.run(init)
-    print('models initialized')
+        init = tf.group(tf.global_variables_initializer(), tf.local_variables_initializer())
+        sess.run(init)
+        print('models initialized')
 
-    saver = tf.train.Saver()
-    if load_model:
-        saver.restore(sess, model_path)
+        saver = tf.train.Saver()
+        if load_model:
+            saver.restore(sess, model_path+f"{RUN_ID}")
 
-    n_transitions = 0
-    i_policy_iter = 0
+        n_transitions = 0
+        i_policy_iter = 0
 
-    print('start training')
-    t_eval = Thread(target=evaluator.run_evaluation)
-    t_eval.start()
-    last_time = time()
-    while True:
+        print('start training')
+        t_eval = Thread(target=evaluator.run_evaluation)
+        t_eval.start()
+        last_time = time()
+        while True:
 
-        # collect states from worker processes
-        process_order = []
+            # collect states from worker processes
+            process_order = []
 
-        for _ in range(ENV_STEPS):
-            states = [w.state for w in workers]
+            for _ in range(ENV_STEPS):
+                states = [w.state for w in workers]
 
-            _, actions, policy_iteration = pol.sample_action(states)
+                _, actions, policy_iteration = pol.sample_action(states)
 
-            for idx, w in enumerate(workers):
-                w.step(actions[idx])
-                if w.done:
+                for idx, w in enumerate(workers):
+                    w.step(actions[idx])
+                    if w.done:
+                        horizon_buffer.append(w.temp_buffer)
+                        w.temp_buffer =[]
+                        w.start_episode()
+
+            for w in workers:
+                if w.temp_buffer:
                     horizon_buffer.append(w.temp_buffer)
-                    w.temp_buffer =[]
-                    w.start_episode()
+                w.temp_buffer = []
 
-        for w in workers:
-            if w.temp_buffer:
-                horizon_buffer.append(w.temp_buffer)
-            w.temp_buffer = []
+            total_transitions_training = 0
 
-        total_transitions_training = 0
+            # calculate gae values from transitions and extend training buffer
+            for transitions in horizon_buffer:
+                total_transitions_training += len(transitions)
+                gae_vals = calculate_gae(transitions, vs)
+                batch_buffer.extend(np.concatenate((transitions, gae_vals), axis=1))
 
-        # calculate gae values from transitions and extend training buffer
-        for transitions in horizon_buffer:
-            total_transitions_training += len(transitions)
-            gae_vals = calculate_gae(transitions, vs)
-            batch_buffer.extend(np.concatenate((transitions, gae_vals), axis=1))
+            print('Average horizon length ', total_transitions_training / len(horizon_buffer))
+            horizon_buffer = []
 
-        print('Average horizon length ', total_transitions_training / len(horizon_buffer))
-        horizon_buffer = []
+            if len(batch_buffer) >= BATCH_SIZE:
+                n_transitions += len(batch_buffer)
+                batch_buffer = np.array(batch_buffer)
 
-        if len(batch_buffer) >= BATCH_SIZE:
-            n_transitions += len(batch_buffer)
-            batch_buffer = np.array(batch_buffer)
+                # Indexes : state:0 ; action:1 ; reward:2 ; next_state:3 ; gae:4
 
-            # Indexes : state:0 ; action:1 ; reward:2 ; next_state:3 ; gae:4
+                pol_summaries = None
+                v_summaries = None
+                batch_end = None
 
-            pol_summaries = None
-            v_summaries = None
-            batch_end = None
+                for i_epoch in range(K_EPOCHS):
+                    for i_batch in range(int(np.ceil(len(batch_buffer) / BATCH_SIZE))):
+                        batch_start = i_batch * BATCH_SIZE
+                        batch_end = min((i_batch + 1) * BATCH_SIZE, len(batch_buffer))
+                        i_policy_iter += 1
 
-            for i_epoch in range(K_EPOCHS):
-                for i_batch in range(int(np.ceil(len(batch_buffer) / BATCH_SIZE))):
-                    batch_start = i_batch * BATCH_SIZE
-                    batch_end = min((i_batch + 1) * BATCH_SIZE, len(batch_buffer))
-                    i_policy_iter += 1
-
-                    pol_summaries = pol.train_policy(
-                        np.stack(batch_buffer[batch_start:batch_end, 0], axis=0),
-                        np.stack(batch_buffer[batch_start:batch_end, 1], axis=0),
-                        np.stack(batch_buffer[batch_start:batch_end, 4], axis=0)
-                    )
-                    writer.add_summary(pol_summaries, i_policy_iter)
-
-                    if i_epoch < K_EPOCHS_VS:
-                        v_summaries = vs.train(
+                        pol_summaries = pol.train_policy(
                             np.stack(batch_buffer[batch_start:batch_end, 0], axis=0),
-                            np.stack(batch_buffer[batch_start:batch_end, 2], axis=0),
-                            np.stack(batch_buffer[batch_start:batch_end, 3], axis=0)
+                            np.stack(batch_buffer[batch_start:batch_end, 1], axis=0),
+                            np.stack(batch_buffer[batch_start:batch_end, 4], axis=0)
                         )
-                        writer.add_summary(v_summaries, i_policy_iter)
+                        writer.add_summary(pol_summaries, i_policy_iter)
 
-            writer.add_summary(state_logger.log(np.stack(batch_buffer[:, 3], axis=0)), i_policy_iter)
-            #writer.add_summary(state_logger_norm.log(norm_next_state), i_epochs)
-            time_now = time()
-            writer.add_summary(t_summary_creator.create_summary(np.reshape(batch_buffer[:, 2], [-1]), time_now - last_time), n_transitions)
-            last_time = time_now
-            SOC_REG_SCHEDULER.x = n_transitions
+                        if i_epoch < K_EPOCHS_VS:
+                            v_summaries = vs.train(
+                                np.stack(batch_buffer[batch_start:batch_end, 0], axis=0),
+                                np.stack(batch_buffer[batch_start:batch_end, 2], axis=0),
+                                np.stack(batch_buffer[batch_start:batch_end, 3], axis=0)
+                            )
+                            writer.add_summary(v_summaries, i_policy_iter)
 
-            print('Total Transitions:  ', n_transitions)
-            print('SOC regularization: ', SOC_REG_SCHEDULER.get_schedule_value())
-            print('Transitions wasted: ',len(batch_buffer) - batch_end, ' / ', len(batch_buffer))
+                writer.add_summary(state_logger.log(np.stack(batch_buffer[:, 3], axis=0)), i_policy_iter)
+                #writer.add_summary(state_logger_norm.log(norm_next_state), i_epochs)
+                time_now = time()
+                writer.add_summary(t_summary_creator.create_summary(np.reshape(batch_buffer[:, 2], [-1]), time_now - last_time), n_transitions)
+                last_time = time_now
+                SOC_REG_SCHEDULER.x = n_transitions
 
-            print('Save model')
-            saver.save(sess, model_path)
+                print('Total Transitions:  ', n_transitions)
+                print('SOC regularization: ', SOC_REG_SCHEDULER.get_schedule_value())
+                print('Transitions wasted: ',len(batch_buffer) - batch_end, ' / ', len(batch_buffer))
 
-            pol.update_old_policy()
-            batch_buffer = []
+                print('Save model')
+                saver.save(sess, model_path+f"{RUN_ID}")
+
+                pol.update_old_policy()
+                batch_buffer = []
