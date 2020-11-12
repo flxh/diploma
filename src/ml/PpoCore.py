@@ -1,9 +1,6 @@
 import tensorflow as tf
 import tensorflow_probability as tfp
 
-GRADIENT_NORM = 30
-CELLS = 100
-TAIL_LEN = 96
 
 STATE_MEAN = tf.constant([ 1.6987270e-01,  3.3652806e+05, -4.7673375e+05, 0])
 
@@ -12,7 +9,7 @@ STATE_VAR = tf.constant([6.0812939e-02, 1.2899629e+11, 6.3592917e+11, 0.5])
 
 class Policy:
 
-    def __init__(self, sess, state_size, action_size, lr, beta_entropy, log_var_init, epsilon, kernel_reg):
+    def __init__(self, sess, state_size, action_size, lr, tail_len, cells, beta_entropy, log_var_init, epsilon, kernel_reg, gradient_norm):
         self.sess = sess
         self.action_size = action_size
         self.kernel_reg = kernel_reg
@@ -21,7 +18,7 @@ class Policy:
         self.policy_iteration = 0
 
         with tf.variable_scope("Policy"):
-            self.state_ph = tf.placeholder(tf.float32, [None, TAIL_LEN, state_size], name="state_ph")
+            self.state_ph = tf.placeholder(tf.float32, [None, tail_len, state_size], name="state_ph")
             self.action_ph = tf.placeholder(tf.float32, [None, action_size], name="action_ph")
             self.advantage_ph = tf.placeholder(tf.float32, [None], name="adavantage_ph")
 
@@ -34,13 +31,13 @@ class Policy:
                 #self.norm_advantage = tf.nn.batch_normalization(self.advantage_ph, adv_mean, adv_var, None, None, 1e-12)
 
             with tf.variable_scope("pi"):
-                self.pi, self.mean_action = self._create_model(trainable=True, input=self.norm_state, n_cells=CELLS, tail_len=TAIL_LEN)
+                self.pi, self.mean_action = self._create_model(trainable=True, input=self.norm_state, n_cells=cells, tail_len=tail_len)
                 self.pi_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope="Policy/pi")
                 self.sample_op = self.pi.sample()
                 tf.summary.histogram('sampled_actions', self.sample_op)
 
             with tf.variable_scope("old_pi"):
-                self.old_pi, _ = self._create_model(trainable=False, input=self.norm_state, n_cells=CELLS, tail_len=TAIL_LEN)
+                self.old_pi, _ = self._create_model(trainable=False, input=self.norm_state, n_cells=cells, tail_len=tail_len)
                 self.old_pi_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope="Policy/old_pi")
 
             with tf.variable_scope("loss"):
@@ -63,7 +60,7 @@ class Policy:
             with tf.variable_scope("training"):
                 self.gradients = tf.gradients(self.loss, self.pi_vars)
                 self.gradients = [tf.clip_by_value(g, -1, 1) for g in self.gradients]
-                self.gradients, _ = tf.clip_by_global_norm(self.gradients, GRADIENT_NORM)
+                self.gradients, _ = tf.clip_by_global_norm(self.gradients, gradient_norm)
                 grads = zip(self.gradients, self.pi_vars)
                 optimizer = tf.train.RMSPropOptimizer(lr)
 
@@ -131,15 +128,15 @@ class Policy:
 
 
 class StateValueApproximator:
-    def __init__(self, sess, state_size, lr, gamma, kernel_reg):
+    def __init__(self, sess, state_size, lr, tail_len, cells, gamma, kernel_reg):
         self.kernel_reg = kernel_reg
         self.sess = sess
 
         self.gamma = tf.constant(gamma, dtype=tf.float32)
 
         with tf.variable_scope("V_s"):
-            self.state_ph = tf.placeholder(tf.float32, [None, TAIL_LEN,state_size])
-            self.next_state_ph = tf.placeholder(tf.float32, [None, TAIL_LEN,state_size])
+            self.state_ph = tf.placeholder(tf.float32, [None, tail_len,state_size])
+            self.next_state_ph = tf.placeholder(tf.float32, [None, tail_len,state_size])
             self.reward_ph = tf.placeholder(tf.float32, [None])
 
             self.norm_state = tf.nn.batch_normalization(self.state_ph, STATE_MEAN, STATE_VAR, None, None, 1e-12)
@@ -147,9 +144,9 @@ class StateValueApproximator:
             #self.norm_state = self.state_ph
 
             with tf.variable_scope("model", reuse=None):
-                self.value_output = self._create_model(self.norm_state, CELLS, TAIL_LEN)
+                self.value_output = self._create_model(self.norm_state, cells, tail_len)
             with tf.variable_scope("model", reuse=True):
-                self.next_value_output = self._create_model(self.norm_next_state, CELLS, TAIL_LEN)
+                self.next_value_output = self._create_model(self.norm_next_state, cells, tail_len)
 
             self.variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope="V_s/model")
             print(self.variables)
@@ -164,7 +161,7 @@ class StateValueApproximator:
                 self.optimizer = tf.train.RMSPropOptimizer(lr)
                 self.grads = tf.gradients(self.loss, self.variables)
                 # self.grads = [tf.clip_by_value(g, -1, 1) for g in self.grads]
-                #self.clipped_grads, _ = tf.clip_by_global_norm(self.grads, GRADIENT_NORM)
+                #self.clipped_grads, _ = tf.clip_by_global_norm(self.grads, gradient_norm)
 
                 grad_var_pairs = zip(self.grads, self.variables)
 
@@ -192,7 +189,7 @@ class StateValueApproximator:
                 tf.summary.histogram("kernel", tf.get_variable("kernel"))
                 tf.summary.histogram("bias", tf.get_variable("bias"))
 
-        return value_output
+        return tf.reshape(value_output, (-1,))
 
     def get_summaries(self):
         return self.sess.run(self.summaries)

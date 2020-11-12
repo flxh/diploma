@@ -28,7 +28,10 @@ class Environment:
         self.single_states = deque(maxlen=tail_len)
 
     def _build_single_state(self, e_load, e_pv):
-        return self.storage.soc(), e_load, e_pv, self.year_position
+        single_state = self.storage.soc(), e_load, e_pv, self.year_position
+        if np.isnan(single_state).any():
+            raise ValueError(f"State must not contain Nan - State: {single_state}")
+        return single_state
 
     def _build_aux_info(self, e_load, e_pv, e_storage):
         return self.storage.soc(), e_load, e_pv, e_storage, self.storage.scheduled_power_ac, self.grid.energy_bought, self.grid.energy_sold, self.grid.energy_wasted

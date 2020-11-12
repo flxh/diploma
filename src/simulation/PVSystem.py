@@ -9,5 +9,5 @@ class PVSystem(GridParticipant):
         self.kwp = kwp
 
     def step(self):
-        power = self.power_ts.popleft() * self.kwp
+        power = self.power_ts.popleft() * self.kwp * -1
         self.consumed_energy = self.dt_step * power

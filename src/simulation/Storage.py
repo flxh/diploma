@@ -1,5 +1,6 @@
 from simulation.GridParticipant import GridParticipant
 from abc import abstractmethod
+import numpy as np
 
 EFFICIENCY = 0.94
 
@@ -7,7 +8,7 @@ class Storage(GridParticipant):
     def __init__(self, capacity, soc_initial, dt_step):
         super().__init__(dt_step=dt_step)
         self.capacity = capacity
-        self.stored_energy = capacity * soc_initial
+        self.stored_energy = capacity * (soc_initial * 0.98 +0.01)
         self.scheduled_power_ac = 0
         self.actual_power = None
 
