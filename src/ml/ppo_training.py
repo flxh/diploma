@@ -30,7 +30,7 @@ np.random.seed(2)
 BATCH_SIZE = 4096
 
 N_WORKERS = 256
-ENV_STEPS = 256
+N_HORIZONT = 256
 
 TAIL_LEN = 96
 
@@ -42,7 +42,7 @@ LR_POLICY = 5e-5
 LR_VS = 8e-5
 
 # These hyperparameters can be left as they are
-KERNEL_REG = 1e-5
+KERNEL_REG = 0.
 EPSILON = 0.2 # KL-Divergence Clipping as per recommendation
 GAMMA = 0.995
 LAMBDA = 0.98
@@ -57,7 +57,7 @@ EVAL_STEPS_PER_ACTION = 15
 WORKER_STEPS_PER_ACTION = 5
 WORKER_EPISODE_STEPS = 47 * WORKER_STEPS_PER_DAY
 
-K_EPOCHS = 6
+K_EPOCHS_POL = 6
 K_EPOCHS_VS = 4
 
 
@@ -224,7 +224,7 @@ class Evaluation:
 
 # initialization of the buffers and the episode queue
 episode_queue = Queue(maxsize=N_WORKERS)
-batch_buffer = []
+training_buffer = []
 horizon_buffer = []
 
 #load time series data
@@ -289,14 +289,16 @@ with tf.Session(config=config) as sess:
     last_time = time()
     while True:
 
-        # collect states from worker processes
+        # Zustandsmatrizen der Worker sammeln
         process_order = []
 
-        for _ in range(ENV_STEPS):
+        for _ in range(N_HORIZONT):
             states = [w.state for w in workers]
 
+            #Aktionen von Strategienetzwerk sampeln
             _, actions, policy_iteration = pol.sample_action(states)
 
+            # Worker mit gesampelten Aktionen einen Aktionsschritt ausführen
             for idx, w in enumerate(workers):
                 w.step(actions[idx])
                 if w.done:
@@ -304,6 +306,8 @@ with tf.Session(config=config) as sess:
                     w.temp_buffer =[]
                     w.start_episode()
 
+        # Zustandsübergänge von Workern sammeln, wenn diese
+        # genügend konsektutive ZÜs für GAE Berechnung haben
         for w in workers:
             if w.temp_buffer:
                 horizon_buffer.append(w.temp_buffer)
@@ -311,59 +315,75 @@ with tf.Session(config=config) as sess:
 
         total_transitions_training = 0
 
-        # calculate gae values from transitions and extend training buffer
+        # GAE berechnen und ZÜs mit GAE in den Trainingsbuffer speichern
         for transitions in horizon_buffer:
             total_transitions_training += len(transitions)
             gae_vals = calculate_gae(transitions, vs)
-            batch_buffer.extend(np.concatenate((transitions, gae_vals), axis=1))
+            training_buffer.extend(np.concatenate((transitions, gae_vals), axis=1))
 
         print('Average horizon length ', total_transitions_training / len(horizon_buffer))
         horizon_buffer = []
 
-        if len(batch_buffer) >= BATCH_SIZE:
-            n_transitions += len(batch_buffer)
-            batch_buffer = np.array(batch_buffer)
+        # Optimierung der Modellparameter beginnen, wenn ausreichend ZÜs im Trainingsbuffer sind
+        if len(training_buffer) >= BATCH_SIZE:
+            n_transitions += len(training_buffer)
+            training_buffer = np.array(training_buffer)
 
-            # Indexes : state:0 ; action:1 ; reward:2 ; next_state:3 ; gae:4
+            # Indezes : state:0 ; action:1 ; reward:2 ; next_state:3 ; gae:4
 
             pol_summaries = None
             v_summaries = None
             batch_end = None
 
-            for i_epoch in range(K_EPOCHS):
-                for i_batch in range(int(np.ceil(len(batch_buffer) / BATCH_SIZE))):
+            # Training für K Epochen
+            for i_epoch in range(K_EPOCHS_POL):
+
+                # Trainingsbuffer wird in Batches zerlegt
+                for i_batch in range(int(np.ceil(len(training_buffer) / BATCH_SIZE))):
                     batch_start = i_batch * BATCH_SIZE
-                    batch_end = min((i_batch + 1) * BATCH_SIZE, len(batch_buffer))
+                    batch_end = min((i_batch + 1) * BATCH_SIZE, len(training_buffer))
                     i_policy_iter += 1
 
+                    # Optimierung des Strategienetzwerks
                     pol_summaries = pol.train_policy(
-                        np.stack(batch_buffer[batch_start:batch_end, 0], axis=0),
-                        np.stack(batch_buffer[batch_start:batch_end, 1], axis=0),
-                        np.stack(batch_buffer[batch_start:batch_end, 4], axis=0)
+                        np.stack(training_buffer[batch_start:batch_end, 0], axis=0),
+                        np.stack(training_buffer[batch_start:batch_end, 1], axis=0),
+                        np.stack(training_buffer[batch_start:batch_end, 4], axis=0)
                     )
                     writer.add_summary(pol_summaries, i_policy_iter)
 
                     if i_epoch < K_EPOCHS_VS:
+                        # Optimierung des Bewertungsnetzwerks
                         v_summaries = vs.train(
-                            np.stack(batch_buffer[batch_start:batch_end, 0], axis=0),
-                            np.stack(batch_buffer[batch_start:batch_end, 2], axis=0),
-                            np.stack(batch_buffer[batch_start:batch_end, 3], axis=0)
+                            np.stack(training_buffer[batch_start:batch_end, 0], axis=0),
+                            np.stack(training_buffer[batch_start:batch_end, 2], axis=0),
+                            np.stack(training_buffer[batch_start:batch_end, 3], axis=0)
                         )
                         writer.add_summary(v_summaries, i_policy_iter)
 
-            writer.add_summary(state_logger.log(np.stack(batch_buffer[:, 3], axis=0)), i_policy_iter)
+            # Speichern der Tensorboarddaten
+            writer.add_summary(state_logger.log(np.stack(training_buffer[:, 3], axis=0)),
+                               i_policy_iter)
             #writer.add_summary(state_logger_norm.log(norm_next_state), i_epochs)
             time_now = time()
-            writer.add_summary(t_summary_creator.create_summary(np.reshape(batch_buffer[:, 2], [-1]), time_now - last_time), n_transitions)
+            writer.add_summary(t_summary_creator.create_summary(
+                np.reshape(training_buffer[:, 2], [-1]), time_now - last_time),
+                n_transitions)
             last_time = time_now
             SOC_REG_SCHEDULER.x = n_transitions
 
+            # Ausgabe für die Konsole
             print('Total Transitions:  ', n_transitions)
             print('SOC regularization: ', SOC_REG_SCHEDULER.get_schedule_value())
-            print('Transitions wasted: ',len(batch_buffer) - batch_end, ' / ', len(batch_buffer))
+            print('Transitions wasted: ',
+                  len(training_buffer) - batch_end, ' / ',
+                  len(training_buffer))
 
+            # Speichern der Modellparameter
             print('Save model')
             saver.save(sess, model_path)
 
+            # Altes Strategienetzwerk = Neues Strategienetzwerk
             pol.update_old_policy()
-            batch_buffer = []
+            # Trainingsbuffer leeren
+            training_buffer = []

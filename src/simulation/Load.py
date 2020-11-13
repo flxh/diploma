@@ -1,12 +1,11 @@
-from simulation.GridParticipant import GridParticipant
+from simulation.GridPart import GridPart
 from collections import deque
 
 
-class Load(GridParticipant):
+class Load(GridPart):
     def __init__(self, load_ts, dt_step):
-        super().__init__()
+        super().__init__(dt_step)
         self.load_ts = deque(load_ts)
-        self.dt_step = dt_step
 
     def step(self):
         power = self.load_ts.popleft()

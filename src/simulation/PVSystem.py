@@ -1,13 +1,12 @@
-from simulation.GridParticipant import GridParticipant
+from simulation.GridPart import GridPart
 from collections import deque
 
 
-class PVSystem(GridParticipant):
+class PVSystem(GridPart):
     def __init__(self, power_ts, kwp, dt_step):
-        super().__init__()
+        super().__init__(dt_step)
         self.power_ts = deque(power_ts)
         self.kwp = kwp
-        self.dt_step = dt_step
 
     def step(self):
         power = self.power_ts.popleft() * self.kwp

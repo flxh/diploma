@@ -1,16 +1,14 @@
-from simulation.GridParticipant import GridParticipant
+from simulation.GridPart import GridPart
 
-EFFICIENCY = 0.94
+EFFICIENCY = 0.93
 
-class Storage(GridParticipant):
+class Storage(GridPart):
     def __init__(self, capacity, soc_initial, dt_step):
-        super().__init__()
+        super().__init__(dt_step)
         self.capacity = capacity
         self.stored_energy = capacity * soc_initial
         self.scheduled_power_ac = 0
         self.actual_power = None
-
-        self.dt_step = dt_step
 
     def soc(self):
         return self.stored_energy / self.capacity

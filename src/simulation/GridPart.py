@@ -1,9 +1,8 @@
 from abc import abstractmethod
-from simulation.simulation_globals import TIME_STEP
 
-
-class GridParticipant:
-    def __init__(self):
+class GridPart:
+    def __init__(self,dt_step):
+        self.dt_step = dt_step
         self.consumed_energy = None
 
     @abstractmethod

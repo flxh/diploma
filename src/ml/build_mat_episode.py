@@ -10,6 +10,12 @@ import pickle as pkl
 load_file_path = '../../loadprofiles_1min.mat'
 pv_file_path ='../../ihm-daten_20252.csv'
 
+load_year_index = 44
+radiation_year_index =4
+episode_name = 'eval_episode8'
+
+#1,0 11,2 17,3 25,4
+
 MINUTES_PER_DAY = 24*60
 # Build evaluation episode and safe as mat (MATLAB) and pkl (PYTHON)
 
@@ -35,19 +41,17 @@ df.fillna(0, inplace=True)
 
 ts_th = np.array(df['tharandt'])
 ts_th_1min = sgn.resample_poly(ts_th, 10,1)
-ts_th_15min = sgn.resample_poly(ts_th, 2,3)
 
 ts_th_1min_years = np.reshape(ts_th_1min[:-(len(ts_th_1min)%(365*MINUTES_PER_DAY))], (-1, 365*MINUTES_PER_DAY))
-ts_th_15min_years = np.reshape(ts_th_15min[:-(len(ts_th_15min)%(365*96))], (-1, 365*96))
 
-ts_load_1min = pges[:, 1]
+ts_load_1min = pges[:, load_year_index]
 ts_load_15min = np.mean(np.reshape(ts_load_1min, (-1,15)), axis=1)
 
 dt0 = datetime(2010,1,1)
 times = [datetime2matlabdn(dt0 + timedelta(minutes=i)) for i in range(365*MINUTES_PER_DAY)]
 
-mat_dict = build_dict_mat_file(ts_load_1min, ts_th_1min_years[0], times)
-sio.savemat('test.mat', mat_dict)
+mat_dict = build_dict_mat_file(ts_load_1min, ts_th_1min_years[radiation_year_index], times)
+sio.savemat(episode_name+'.mat', mat_dict)
 
 plt.plot(range(MINUTES_PER_DAY*7), ts_load_1min[:MINUTES_PER_DAY*7])
 plt.plot(range(MINUTES_PER_DAY*7), -ts_th_1min_years[0,:MINUTES_PER_DAY*7])
@@ -57,7 +61,7 @@ year_cycle = np.array([-np.cos(((x+MINUTES_PER_DAY*10)/(MINUTES_PER_DAY*365))*2*
 buy_price_ts = np.array([1.]*len(ts_load_1min))
 sell_price_ts = np.array([0.]*len(ts_load_1min))
 
-py_episode = EpisodeContainer(ts_load_1min, -ts_th_1min_years[0], year_cycle, buy_price_ts, sell_price_ts)
-pkl.dump(py_episode, open('eval_episode.pkl', 'wb'))
+py_episode = EpisodeContainer(ts_load_1min, -ts_th_1min_years[radiation_year_index], year_cycle, buy_price_ts, sell_price_ts)
+pkl.dump(py_episode, open(episode_name+'.pkl', 'wb'))
 
 print('exit')

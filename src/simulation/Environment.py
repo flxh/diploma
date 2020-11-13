@@ -43,45 +43,56 @@ class Environment:
         return np.array(self.single_states)
 
     def step(self, action):
-        # carry out action
+        # Aktion trimmen
+        # Wird benötigt, da stochastische Aktionen Grenzwerte überschreiten
         action = np.clip(action, -1., 1.)
+
+        # Leistung des Speichers einstellen
         self.storage.scheduled_power_ac = action[0] * 1500
-        # parts can be stepped and metered in finer steps than RL algorithm to record fluctuations
 
         done = None
         e_pv = 0
         e_load = 0
         e_storage = 0
 
+        # n Simulationsschritte ausführen
         for _ in range(self.sim_steps_per_action):
-            ## step all grid parts
+            # Alle Systemkomponenten einen Zeitschritt ausführen
             self._step_grid_parts()
-            ## collect energy 'packages' from all parts an meter it
+            # Energiemengen des Systemkomponenten einsammeln
             self.grid.meter_energy_from_parts()
-
+            # Energiepreise aus der Zeitreihe abrufen
             buy_price = self.buy_price_ts.popleft()
             sell_price = self.sell_price_ts.popleft()
             self.year_position = self.year_cycle_ts.popleft()
 
+            # Energiemenge der einzelnen Komponenten addieren
+            # dient ausschließlich der Dokumentation des Trainings
             e_pv += self.pv_system.consumed_energy
             e_load += self.load.consumed_energy
             e_storage += self.storage.consumed_energy
 
+            # Prüfen ob Episode zu Ende ist
             done = not self.buy_price_ts
             if done:
                 break
 
+        # Belohnungssignal berechnen
+        reward = (sell_price * self.grid.energy_sold
+                  - buy_price * self.grid.energy_bought) / JOULES_PER_KWH
 
-        reward = (sell_price * self.grid.energy_sold - buy_price * self.grid.energy_bought) / JOULES_PER_KWH
-        # prevent drain towards end of episode
-        reward += ((sell_price * self.storage.stored_energy / 2) / JOULES_PER_KWH if done else 0)
+        # Bewertung der gespeicherten Energie am Ende einer Episode
+        reward += ((sell_price * self.storage.stored_energy / 2)
+                   / JOULES_PER_KWH if done else 0)
 
-        scaled_reward = reward / np.sqrt(3e-3)  -  self.soc_reward * np.abs((2*self.storage.soc() - 1))
-
-        #reset meter for next environment step
-
+        # Belohnungssignal skalieren und SOC Regulierung
+        scaled_reward = reward / np.sqrt(3e-3)  \
+                        -  self.soc_reward * np.abs((2*self.storage.soc() - 1))
+        # Einzelnen Zustandsvektor speichern
         self.single_states.append(self._build_single_state(e_load, e_pv))
+        # Zusatzinformation zur Dokumentation generieren
         aux_info = self._build_aux_info(e_load, e_pv, e_storage)
+        # Energiezähler zurücksetzen
         self.grid.reset_meter()
 
         return np.asarray(self.single_states), scaled_reward, done, aux_info
