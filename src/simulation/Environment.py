@@ -1,10 +1,10 @@
 from simulation.Grid import Grid
 from simulation.Load import Load
-from simulation.Storage import Storage
+from simulation.ValueMapStorage import ValueMapStorage
 from simulation.PVSystem import PVSystem
 from collections import deque
 import numpy as np
-from simulation.simulation_globals import JOULES_PER_KWH, MAX_POWER_TO_GRID, KWP, CAPACITY
+from simulation.simulation_globals import JOULES_PER_KWH, MAX_POWER_TO_GRID, KWP, CAPACITY, BATTERY_VALUE_MAP_FILE, CONVERTER_VALUE_MAP_FILE
 
 INFO_HEADER = ['SOC', 'LOAD_CONSUM', 'PV_COMSUM', 'STORAGE_CONSUM', 'STORAGE_SCHEDULED_POWER', 'GRID_BOUGHT', 'GRID_SOLD', 'GRID_WASTED']
 
@@ -13,7 +13,7 @@ class Environment:
     def __init__(self, tail_len, episode_container, dt_sim_step, soc_reward=0, soc_initial=0.5, sim_steps_per_action=1):
         self.pv_system = PVSystem(episode_container.pv_ts, KWP, dt_sim_step)
         self.load = Load(episode_container.load_ts, dt_sim_step)
-        self.storage = Storage(CAPACITY, soc_initial, dt_sim_step)
+        self.storage = ValueMapStorage(CAPACITY, soc_initial, dt_sim_step, CONVERTER_VALUE_MAP_FILE, BATTERY_VALUE_MAP_FILE)
         self.soc_reward = soc_reward
 
         self.sim_steps_per_action = sim_steps_per_action
@@ -28,7 +28,10 @@ class Environment:
         self.single_states = deque(maxlen=tail_len)
 
     def _build_single_state(self, e_load, e_pv):
-        return self.storage.soc(), e_load, e_pv, self.year_position
+        single_state = self.storage.soc(), e_load, e_pv, self.year_position
+        if np.isnan(single_state).any():
+            raise ValueError(f"State must not contain Nan - State: {single_state}")
+        return single_state
 
     def _build_aux_info(self, e_load, e_pv, e_storage):
         return self.storage.soc(), e_load, e_pv, e_storage, self.storage.scheduled_power_ac, self.grid.energy_bought, self.grid.energy_sold, self.grid.energy_wasted

@@ -1,9 +1,9 @@
 from abc import abstractmethod
 
-class GridPart:
+class GridParticipant:
     def __init__(self,dt_step):
-        self.dt_step = dt_step
         self.consumed_energy = None
+        self.dt_step = dt_step
 
     @abstractmethod
     def step(self):
