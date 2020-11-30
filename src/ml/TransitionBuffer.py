@@ -13,6 +13,7 @@ class Transition:
 
 
 class TransitionBuffer(list):
+
     def __init__(self, vals=[]):
         for v in vals:
             self._check_new_value(v)

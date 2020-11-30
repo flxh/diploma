@@ -6,6 +6,7 @@ STATE_MEAN = tf.constant([ 1.6987270e-01,  3.3652806e+05, -4.7673375e+05, 0])
 
 STATE_VAR = tf.constant([6.0812939e-02, 1.2899629e+11, 6.3592917e+11, 0.5])
 
+# TODO shared LSTM memory different heads
 
 class Policy:
 
@@ -26,9 +27,9 @@ class Policy:
             #self.norm_state = self.state_ph
 
             self.norm_advantage = self.advantage_ph
-            #with tf.variable_scope("adv_batch_norm"):
-                #adv_mean, adv_var = tf.nn.moments(self.advantage_ph, axes=[0])
-                #self.norm_advantage = tf.nn.batch_normalization(self.advantage_ph, adv_mean, adv_var, None, None, 1e-12)
+            with tf.variable_scope("adv_batch_norm"):
+                adv_mean, adv_var = tf.nn.moments(self.advantage_ph, axes=[0])
+                self.norm_advantage = tf.nn.batch_normalization(self.advantage_ph, adv_mean, adv_var, None, None, 1e-12)
 
             with tf.variable_scope("pi"):
                 self.pi, self.mean_action = self._create_model(trainable=True, input=self.norm_state, n_cells=cells, tail_len=tail_len)
@@ -49,17 +50,19 @@ class Policy:
 
                 self.pi_entropy = tf.reduce_mean(self.pi.entropy())  # sum over action space then mean
                 self.surrogate = tf.reduce_mean(clipped_surrogate)
+                self.action_reg_loss = tf.reduce_mean(self.mean_action**2)
 
                 tf.summary.scalar("entropy", self.pi_entropy)
                 tf.summary.scalar('surrogate', self.surrogate)
+                tf.summary.scalar('action_reg', self.action_reg_loss)
 
-                self.loss = -self.surrogate - beta_entropy * self.pi_entropy # maximise surrogate and entropy
+                self.loss = -self.surrogate - beta_entropy * self.pi_entropy + 0.033*self.action_reg_loss # maximise surrogate and entropy
 
                 tf.summary.scalar("objective", self.loss)
 
             with tf.variable_scope("training"):
                 self.gradients = tf.gradients(self.loss, self.pi_vars)
-                self.gradients = [tf.clip_by_value(g, -1, 1) for g in self.gradients]
+                #self.gradients = [tf.clip_by_value(g, -1, 1) for g in self.gradients]
                 self.gradients, _ = tf.clip_by_global_norm(self.gradients, gradient_norm)
                 grads = zip(self.gradients, self.pi_vars)
                 optimizer = tf.train.RMSPropOptimizer(lr)
@@ -89,7 +92,7 @@ class Policy:
 
         mu = tf.layers.Dense(self.action_size, activation="tanh", name=layer_names[1], trainable=trainable, kernel_initializer = tf.initializers.he_normal(), kernel_regularizer=tf.contrib.layers.l2_regularizer(scale=self.kernel_reg))(output)
 
-        log_sigma = tf.Variable(initial_value=tf.fill((self.action_size,), self.log_var_init), trainable=False, name="log_sigma")
+        log_sigma = tf.Variable(initial_value=tf.fill((self.action_size,), self.log_var_init), trainable=trainable, name="log_sigma")
         #log_sigma = tf.constant([1.])
 
         distribution = tfp.distributions.MultivariateNormalDiag(loc=mu, scale_diag=tf.exp(log_sigma))
@@ -152,7 +155,7 @@ class StateValueApproximator:
             print(self.variables)
 
             with tf.variable_scope("loss"):
-                self.diff = self.value_output - self.reward_ph - self.gamma*self.next_value_output
+                self.diff = self.value_output - self.reward_ph - self.gamma * tf.stop_gradient(self.next_value_output)
                 self.loss = tf.reduce_mean(tf.square(self.diff))
                 self.loss_summary = tf.summary.scalar("mean_error", tf.reduce_mean(tf.abs(self.diff)))
                 self.mean_predict_summary = tf.summary.scalar("mean_prediction", tf.reduce_mean(self.value_output))

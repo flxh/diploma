@@ -1,4 +1,4 @@
-from simulation.GridParticipant import GridParticipant
+from simulation.GridPart import GridParticipant
 from abc import abstractmethod
 import numpy as np
 

@@ -1,10 +1,11 @@
 from simulation.Grid import Grid
 from simulation.Load import Load
 from simulation.ValueMapStorage import ValueMapStorage
+from simulation.ConstantStorage import ConstantStorage
 from simulation.PVSystem import PVSystem
 from collections import deque
 import numpy as np
-from simulation.simulation_globals import JOULES_PER_KWH, MAX_POWER_TO_GRID, KWP, CAPACITY, BATTERY_VALUE_MAP_FILE, CONVERTER_VALUE_MAP_FILE
+from simulation.simulation_globals import JOULES_PER_KWH, MAX_POWER_TO_GRID, KWP, CAPACITY, BATTERY_VALUE_MAP_FILE, CONVERTER_VALUE_MAP_FILE, CONVERTER_MAX_POWER
 
 INFO_HEADER = ['SOC', 'LOAD_CONSUM', 'PV_COMSUM', 'STORAGE_CONSUM', 'STORAGE_SCHEDULED_POWER', 'GRID_BOUGHT', 'GRID_SOLD', 'GRID_WASTED']
 
@@ -13,7 +14,8 @@ class Environment:
     def __init__(self, tail_len, episode_container, dt_sim_step, soc_reward=0, soc_initial=0.5, sim_steps_per_action=1):
         self.pv_system = PVSystem(episode_container.pv_ts, KWP, dt_sim_step)
         self.load = Load(episode_container.load_ts, dt_sim_step)
-        self.storage = ValueMapStorage(CAPACITY, soc_initial, dt_sim_step, CONVERTER_VALUE_MAP_FILE, BATTERY_VALUE_MAP_FILE)
+        #self.storage = ValueMapStorage(CAPACITY, soc_initial, dt_sim_step, CONVERTER_VALUE_MAP_FILE, BATTERY_VALUE_MAP_FILE)
+        self.storage = ConstantStorage(CAPACITY, soc_initial, dt_sim_step)
         self.soc_reward = soc_reward
 
         self.sim_steps_per_action = sim_steps_per_action
@@ -23,6 +25,7 @@ class Environment:
         self.buy_price_ts = deque(episode_container.buy_price_ts)
         self.sell_price_ts = deque(episode_container.sell_price_ts)
         self.year_cycle_ts = deque(episode_container.year_cycle_ts)
+
 
         self.grid = Grid([self.pv_system, self.load, self.storage], MAX_POWER_TO_GRID,dt_sim_step)
         self.single_states = deque(maxlen=tail_len)
@@ -49,9 +52,10 @@ class Environment:
         # Aktion trimmen
         # Wird benötigt, da stochastische Aktionen Grenzwerte überschreiten
         action = np.clip(action, -1., 1.)
-
         # Leistung des Speichers einstellen
-        self.storage.scheduled_power_ac = action[0] * 1500
+        action = action*CONVERTER_MAX_POWER
+
+        self.storage.scheduled_power_ac = action[0]
 
         done = None
         e_pv = 0
@@ -89,8 +93,8 @@ class Environment:
                    / JOULES_PER_KWH if done else 0)
 
         # Belohnungssignal skalieren und SOC Regulierung
-        scaled_reward = reward / np.sqrt(3e-3)  \
-                        -  self.soc_reward * np.abs((2*self.storage.soc() - 1))
+        scaled_reward = ((reward / np.sqrt(3e-3)  \
+                        -  self.soc_reward * np.abs((2*self.storage.soc() - 1)))+1.7) / 5**0.5
         # Einzelnen Zustandsvektor speichern
         self.single_states.append(self._build_single_state(e_load, e_pv))
         # Zusatzinformation zur Dokumentation generieren

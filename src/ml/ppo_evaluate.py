@@ -8,6 +8,7 @@ import pickle as pkl
 
 from ml.PpoCore import Policy, StateValueApproximator
 from simulation.Environment import Environment
+from ml.ppo_training import EvaluationWorker
 from ml.utils import LinearScheduler
 
 random.seed(2)
@@ -20,6 +21,8 @@ N_WORKERS = 256
 ENV_STEPS = 256
 
 TAIL_LEN = 96
+CELLS = 130
+GRADIENT_NORM = 10.
 
 SOC_REG_SCHEDULER = LinearScheduler(3., 3., 30e6)
 SOC_REG_SCHEDULER.x = 0
@@ -46,7 +49,15 @@ WORKER_EPISODE_STEPS = 47 * WORKER_STEPS_PER_DAY
 
 eval_episode_name = 'eval_episode8'
 
-model_path = './model_safe (copy)/model_150_test'
+model_path = '/workspace/models/3016'
+
+eval_episodes = []
+with open('../../eval_episodes.pkl', 'rb') as file:
+    while True:
+        try:
+            eval_episodes.append(pkl.load(file))
+        except EOFError:
+            break
 
 eval_episode = pkl.load(open('./{}.pkl'.format(eval_episode_name), 'rb'))
 
@@ -56,10 +67,8 @@ action_dim = 1
 config = tf.ConfigProto()
 #config.gpu_options.per_process_gpu_memory_fraction = 0.80
 with tf.Session(config=config) as sess:
-    now = datetime.now()
 
-    vs = StateValueApproximator(sess, state_dim, LR_VS, GAMMA, KERNEL_REG)
-    pol = Policy(sess, state_dim, action_dim, LR_POLICY, BETA, LOG_VAR_INIT, EPSILON, KERNEL_REG)
+    pol = Policy(sess, state_dim, action_dim, LR_POLICY, TAIL_LEN, CELLS, BETA, LOG_VAR_INIT, EPSILON, KERNEL_REG, GRADIENT_NORM)
 
     init = tf.group(tf.global_variables_initializer(), tf.local_variables_initializer())
     sess.run(init)
@@ -69,27 +78,28 @@ with tf.Session(config=config) as sess:
     saver.restore(sess, model_path)
 
     print('starting evaluation run')
-    env = Environment(TAIL_LEN, eval_episode, DT_EVAL_STEP, sim_steps_per_action=EVAL_STEPS_PER_ACTION)
-    state = env.reset()
-    done = False
-    rewards = []
-    infos = []
-    steps =0
+    eval_workers = [EvaluationWorker(ep) for ep in eval_episodes]
 
-    while not done:
+    for e in eval_workers:
+        e.start_episode()
+
+    steps = 0
+    while not all([e.done for e in eval_workers]):
         steps +=1
-        if steps % 1000 == 0:
+
+        states = [e.state for e in eval_workers]
+
+        actions, _, _ = pol.sample_action(states)
+
+        for e, a in zip(eval_workers, actions):
+            if e.done:
+                continue
+            e.step(a)
+
+        if steps % 100 == 0 or all([e.done for e in eval_workers]):
             print(steps)
-        actions, _, _ = pol.sample_action([state])
-        action = actions[0]
 
-        next_state, reward, done, info = env.step(action)
-        rewards.append(reward)
-
-        with open('./evaluations/{}.csv'.format(eval_episode_name), 'a') as file:
-            file.write(('{};'*len(info)+'\n').format(*info))
-
-        infos.append(info)
-        state = next_state
-
-    print(np.mean(rewards))
+            for i, ew in enumerate(eval_workers):
+                with open('./evaluations/{}.csv'.format(i), 'a') as file:
+                    for ai in ew.temp_buffer.aux_info:
+                        file.write(('{};'*len(ai)+'\n').format(*ai))
