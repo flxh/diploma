@@ -26,40 +26,27 @@ random.seed(2)
 np.random.seed(2)
 
 #TODO TRANSFORMTHIS TO DICT
-
-# HYPERPARAMETERS
-BATCH_SIZE = 4096
-#BATCH_SIZE = 128
-
-N_WORKERS = 256
-#N_WORKERS = 16
-ENV_STEPS = 256
-#ENV_STEPS = 16
-
-TAIL_LEN = 96
-CELLS = 180
-GRADIENT_NORM = 10.
-
-#SOC_REG_SCHEDULER = LinearScheduler(0., 0., 30e6)
-#SOC_REG_SCHEDULER.x = 0
-
-KERNEL_REG = 0.
-BETA = 0.005
-LR_POLICY = 1e-4
-LR_VS = 3e-4
-
-# These hyperparameters can be left as they are
-#KERNEL_REG = 1e-5
-EPSILON = 0.15 # KL-Divergence Clipping as per recommendation
-GAMMA = 0.998
-LAMBDA = 0.9
-LOG_VAR_INIT = -0.5
+HP = {
+    'BATCH_SIZE': 4096,
+    'N_WORKERS': 256,
+    'ENV_STEPS': 256,
+    'TAIL_LEN': 96,
+    'CELLS': 150,
+    'GRADIENT_NORM': 10.,
+    'KERNEL_REG': 0.,
+    'BETA': 0.005,
+    'LR_POLICY': 1e-4,
+    'LR_VS': 2e-4,
+    'EPSILON': 0.15,
+    'GAMMA' : 0.998,
+    'LAMBDA' : 0.9,
+    'LOG_VAR_INIT' : -0.5,
+    'K_EPOCHS' : 6,
+    'K_EPOCHS_VS' : 4
+}
 
 DT_SIM_STEP = 60
 SIM_STEPS_PER_ACTION = 15
-
-K_EPOCHS = 6
-K_EPOCHS_VS = 4
 
 QUEUE_SIZE = 10
 
@@ -93,7 +80,7 @@ class Worker:
     # TODO check if can be made private and called automatically
     def start_episode(self):
         episode_container = self._next_episode()
-        self.env = Environment(TAIL_LEN, episode_container, DT_SIM_STEP, sim_steps_per_action=SIM_STEPS_PER_ACTION)
+        self.env = Environment(HP['TAIL_LEN'], episode_container, DT_SIM_STEP, sim_steps_per_action=SIM_STEPS_PER_ACTION)
 
         self.temp_buffer.clear()
 
@@ -165,14 +152,14 @@ def calculate_gae(transition_buffer, vs):
     state_values = stacked_values[:len(states)]
     next_state_values = stacked_values[len(states):]
 
-    td_residuals = rewards + GAMMA * next_state_values - state_values
+    td_residuals = rewards + HP['GAMMA'] * next_state_values - state_values
 
     gae_values = []
     last_gea = 0
 
     # see GAE paper Schulman formula 15
     for tdr in reversed(td_residuals):
-        gae = tdr + LAMBDA * GAMMA * last_gea
+        gae = tdr + HP['LAMBDA'] * HP['GAMMA'] * last_gea
         gae_values.append(gae)
         last_gea = gae
 
@@ -228,13 +215,13 @@ if __name__ == '__main__':
     if len(sys.argv) > 2:
         PARAM_SET = int(sys.argv[2])
         params = np.genfromtxt(f'{sys.argv[3]}', delimiter=';', skip_header=1)
-        GAMMA = params[PARAM_SET,0]
-        LR_POLICY = params[PARAM_SET,2]
-        LR_VS = params[PARAM_SET,2] * 3
-        BETA = params[PARAM_SET,1]
+        HP['GAMMA'] = params[PARAM_SET,0]
+        HP['LR_POLICY'] = params[PARAM_SET,2]
+        HP['LR_VS'] = params[PARAM_SET,2] * 2
+        HP['BETA'] = params[PARAM_SET,1]
 
-    for x in zip(['LR_POLICY','LR_VS', 'EPSILON', 'LAMBDA', 'GAMMA'],[LR_POLICY,LR_VS, EPSILON, LAMBDA, GAMMA]):
-        print('{:.<12}{}'.format(*x))
+    for x in HP.items():
+        print('{:.<16}{}'.format(*x))
 
     # initialization of the buffers and the episode queue
     m = Manager()
@@ -260,22 +247,24 @@ if __name__ == '__main__':
     action_dim = 1
 
     config = tf.ConfigProto()
-    config.gpu_options.per_process_gpu_memory_fraction = 0.8
+    config.gpu_options.per_process_gpu_memory_fraction = 0.31
     with tf.Session(config=config) as sess:
         now = datetime.now()
 
-        vs = StateValueApproximator(sess, state_dim, LR_VS, TAIL_LEN, CELLS, GAMMA, KERNEL_REG)
-        pol = Policy(sess, state_dim, action_dim, LR_POLICY, TAIL_LEN, CELLS,  BETA, LOG_VAR_INIT, EPSILON, KERNEL_REG, GRADIENT_NORM)
+        vs = StateValueApproximator(sess, state_dim, HP['LR_VS'], HP['TAIL_LEN'], HP['CELLS'], HP['GAMMA'], HP['KERNEL_REG'])
+        pol = Policy(sess, state_dim, action_dim, HP['LR_POLICY'], HP['TAIL_LEN'], HP['CELLS'],  HP['BETA'], HP['LOG_VAR_INIT'], HP['EPSILON'], HP['KERNEL_REG'], HP['GRADIENT_NORM'])
         state_logger = StateLogger(sess, ['SOC', 'LOAD', 'PV', 'CYCLE'], "state")
         state_logger_norm = StateLogger(sess,  ['SOC', 'LOAD', 'PV', 'CYCLE'], "norm_state")
         t_summary_creator = TrainingSummaryCreator(sess)
 
         if not os.path.isfile(runs_file):
             with open(runs_file, 'a') as file:
-                file.write(f'RUN_ID;SOC_REG;LR_POLICY;LR_VS;EPSILON;LAMBDA;GAMMA\n')
+                file.write('RUN_ID'+(';{}'*len(HP)).format(*sorted(HP.keys())))
+                file.write('\n')
 
         with open(runs_file, 'a') as file:
-            file.write(f'{RUN_ID};{LR_POLICY};{LR_VS};{EPSILON};{LAMBDA};{GAMMA}\n')
+            file.write(f'{RUN_ID}'+(';{}'*len(HP)).format(*[HP[k] for k in sorted(HP.keys())]))
+            file.write('\n')
 
         #experiment_name = "{}-a{}-lr{}-sr{}".format(now.strftime('%Y-%m-%dT%H%M%S'), BETA, LR_POLICY, SOC_REG_SCHEDULER.get_schedule_value())
         temp_folder = temp_path + f"{RUN_ID}"
@@ -287,7 +276,7 @@ if __name__ == '__main__':
         # print("RUN META")
         print(RUN_ID)
 
-        tr_workers = [TrainingWorker(episode_queue) for _ in range(N_WORKERS)]
+        tr_workers = [TrainingWorker(episode_queue) for _ in range(HP['N_WORKERS'])]
         ev_workers = [EvaluationWorker(eep) for eep in eval_episodes[:64]]
 
         print('Workers created')
@@ -309,7 +298,7 @@ if __name__ == '__main__':
         last_time = time()
 
         while True:
-                for _ in range(ENV_STEPS):
+                for _ in range(HP['ENV_STEPS']):
                     states = []
                     for w in tr_workers + ev_workers:
                         if w.done: w.start_episode()
@@ -317,14 +306,14 @@ if __name__ == '__main__':
 
                     determ_actions, actions, policy_iteration = pol.sample_action(states)
 
-                    tr_actions = list(actions[:N_WORKERS])
-                    ev_actions = list(determ_actions[N_WORKERS:])
+                    tr_actions = list(actions[:HP['N_WORKERS']])
+                    ev_actions = list(determ_actions[HP['N_WORKERS']:])
 
                     for w,a in zip(tr_workers+ev_workers, tr_actions+ev_actions):
                         w.step(a)
 
                     for w in tr_workers:
-                        if (w.done and w.temp_buffer) or len(w.temp_buffer) >= ENV_STEPS:
+                        if (w.done and w.temp_buffer) or len(w.temp_buffer) >= HP['ENV_STEPS']:
                             horizon_buffers.append(w.temp_buffer.copy())
                             w.temp_buffer.clear()
 
@@ -345,7 +334,7 @@ if __name__ == '__main__':
                 print('Average horizon length ', total_transitions_training / len(horizon_buffers))
                 horizon_buffers.clear()
 
-                if len(training_buffer) >= BATCH_SIZE:
+                if len(training_buffer) >= HP['BATCH_SIZE']:
                     n_transitions += len(training_buffer)
 
                     # Indices : state:0 ; action:1 ; reward:2 ; next_state:3 ; gae:4
@@ -356,9 +345,9 @@ if __name__ == '__main__':
 
                     random.shuffle(training_buffer)
 
-                    for i_epoch in range(K_EPOCHS):
-                        for batch_start in range(0, len(training_buffer), BATCH_SIZE):
-                            batch_end = min(batch_start + BATCH_SIZE, len(training_buffer))
+                    for i_epoch in range(HP['K_EPOCHS']):
+                        for batch_start in range(0, len(training_buffer), HP['BATCH_SIZE']):
+                            batch_end = min(batch_start + HP['BATCH_SIZE'], len(training_buffer))
                             batch = training_buffer[batch_start:batch_end]
 
                             i_policy_iter += 1
@@ -370,7 +359,7 @@ if __name__ == '__main__':
                             )
                             writer.add_summary(pol_summaries, i_policy_iter)
 
-                            if i_epoch < K_EPOCHS_VS:
+                            if i_epoch < HP['K_EPOCHS_VS']:
                                 v_summaries = vs.train(
                                     batch.states,
                                     batch.rewards,
