@@ -14,19 +14,10 @@ from ml.utils import LinearScheduler
 random.seed(2)
 np.random.seed(2)
 
-# HYPERPARAMETERS
-BATCH_SIZE = 4096
-
-N_WORKERS = 256
-ENV_STEPS = 256
-
+# HYPERPARAMETER
 TAIL_LEN = 96
-CELLS = 130
+CELLS = 150
 GRADIENT_NORM = 10.
-
-SOC_REG_SCHEDULER = LinearScheduler(3., 3., 30e6)
-SOC_REG_SCHEDULER.x = 0
-
 BETA = 0.0
 LR_POLICY = 5e-5
 LR_VS = 8e-5
@@ -47,9 +38,7 @@ EVAL_STEPS_PER_ACTION = 15
 WORKER_STEPS_PER_ACTION = 5
 WORKER_EPISODE_STEPS = 47 * WORKER_STEPS_PER_DAY
 
-eval_episode_name = 'eval_episode8'
-
-model_path = '/workspace/models/3016'
+model_path = '/workspace/models/6850676_0'
 
 eval_episodes = []
 with open('../../eval_episodes.pkl', 'rb') as file:
@@ -58,8 +47,6 @@ with open('../../eval_episodes.pkl', 'rb') as file:
             eval_episodes.append(pkl.load(file))
         except EOFError:
             break
-
-eval_episode = pkl.load(open('./{}.pkl'.format(eval_episode_name), 'rb'))
 
 state_dim = 4
 action_dim = 1
