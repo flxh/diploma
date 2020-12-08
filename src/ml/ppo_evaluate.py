@@ -90,3 +90,4 @@ with tf.Session(config=config) as sess:
                 with open('./evaluations/{}.csv'.format(i), 'a') as file:
                     for ai in ew.temp_buffer.aux_info:
                         file.write(('{};'*len(ai)+'\n').format(*ai))
+                    ew.temp_buffer.clear()

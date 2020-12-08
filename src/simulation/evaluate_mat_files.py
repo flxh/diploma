@@ -1,5 +1,6 @@
 import scipy.io as sio
 from simulation.Environment import Environment
+from simulation.simulation_globals import CONVERTER_MAX_POWER
 import pickle as pkl
 
 eval_episodes = []
@@ -16,14 +17,15 @@ if __name__ == '__main__':
     P_schedule = mat_file['P_B_all']
 
 
-    for i in range(100):
+    for i in range(0,50):
         aux_infos = []
-        env = Environment(1, eval_episodes[i], 60, scale_actions=None)
+        env = Environment(1, eval_episodes[i], 60, sim_steps_per_action=1)
         print(i)
-        for p_schedule in P_schedule[i,1,:]:
-            _,_,_,aux = env.step([p_schedule])
+        for p_schedule in P_schedule[i,0,:]:
+            _,_,_,aux = env.step([p_schedule/CONVERTER_MAX_POWER])
             aux_infos.append(aux)
 
+        aux_infos = aux_infos[1440:] #drop the first 1440 Steps because ML needs "warm up phase" = 96Steps * 15 Minutes
         for ai in aux_infos:
-            with open('./mat_evaluations/{}_prog.csv'.format(i), 'a') as file:
+            with open('./mat_evaluations/{}_prio.csv'.format(i), 'a') as file:
                 file.write(('{};'*len(ai)+'\n').format(*ai))
