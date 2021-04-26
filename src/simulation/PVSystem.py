@@ -3,11 +3,10 @@ from collections import deque
 
 
 class PVSystem(GridParticipant):
-    def __init__(self, power_ts, kwp, dt_step):
-        super().__init__(dt_step=dt_step)
+    def __init__(self, grid, power_ts, kwp):
+        super().__init__(grid)
         self.power_ts = deque(power_ts)
         self.kwp = kwp
 
-    def step(self):
-        power = self.power_ts.popleft() * self.kwp * -1
-        self.consumed_energy = self.dt_step * power
+    def _step(self):
+        return self.power_ts.popleft() * self.kwp * -1

@@ -8,6 +8,7 @@ import numpy as np
 # *_dc_power electrical power drawn from/pushed into the battery
 # *_battery_power power that is expended by the stored chemical energy of the battery
 
+
 class ValueMapStorage(Storage):
     def __init__(self, capacity, soc_initial, dt_step, converter_vm_file, battery_vm_file):
         super().__init__(capacity=capacity, soc_initial=soc_initial, dt_step=dt_step)
@@ -57,6 +58,6 @@ class ValueMapStorage(Storage):
                              f'P_AC_A: {actual_power_ac}, P_L: {battery_loss}, eta: {eta_converter}, SOC: {self.soc()}')
 
         self.stored_energy += actual_battery_power * self.dt_step
-        self.consumed_energy = actual_power_ac *self.dt_step
+        return actual_power_ac
 
 

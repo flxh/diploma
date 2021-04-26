@@ -1,17 +1,18 @@
 class Grid:
-    def __init__(self, grid_parts, max_power_to_utility, dt_step):
-        self.parts = grid_parts
+    def __init__(self, max_power_to_utility, dt_step):
         self.energy_bought = 0
         self.energy_sold = 0
         self.energy_wasted = 0
         self.max_power_to_utility = max_power_to_utility
+        self.power_balance = 0
 
         self.dt_step = dt_step
 
-    def meter_energy_from_parts(self):
-        period_energy_consumed = 0
-        for p in self.parts:
-            period_energy_consumed += p.consumed_energy
+    def add_draw(self, power_draw):
+        self.power_balance += power_draw
+
+    def update_meters(self):
+        period_energy_consumed = self.power_balance * self.dt_step
 
         if period_energy_consumed > 0:
             self.energy_bought += period_energy_consumed
@@ -21,6 +22,8 @@ class Grid:
 
             self.energy_sold += energy_to_grid
             self.energy_wasted += (energy_outbound - energy_to_grid)
+
+        self.power_balance = 0
 
     def reset_meter(self):
         self.energy_bought = 0

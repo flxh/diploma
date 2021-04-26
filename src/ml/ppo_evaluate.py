@@ -38,7 +38,7 @@ EVAL_STEPS_PER_ACTION = 15
 WORKER_STEPS_PER_ACTION = 5
 WORKER_EPISODE_STEPS = 47 * WORKER_STEPS_PER_DAY
 
-model_path = '/workspace/models/6850676_0'
+model_path = '/workspace/models/11468880_0'
 
 eval_episodes = []
 with open('../../eval_episodes.pkl', 'rb') as file:
@@ -87,7 +87,7 @@ with tf.Session(config=config) as sess:
             print(steps)
 
             for i, ew in enumerate(eval_workers):
-                with open('./evaluations/{}.csv'.format(i), 'a') as file:
+                with open('./evaluations_pboff_4000/{}.csv'.format(i), 'a') as file:
                     for ai in ew.temp_buffer.aux_info:
                         file.write(('{};'*len(ai)+'\n').format(*ai))
                     ew.temp_buffer.clear()

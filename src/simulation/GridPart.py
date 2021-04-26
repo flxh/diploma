@@ -1,15 +1,20 @@
 from abc import abstractmethod
 
+
 class GridParticipant:
-    def __init__(self,dt_step):
-        self.consumed_energy = None
-        self.dt_step = dt_step
+    def __init__(self, grid):
+        self.grid = grid
+
+    def step(self):
+        power_draw = self._step()
+        self.grid.add_draw(power_draw)
+        return power_draw
 
     @abstractmethod
-    def step(self):
+    def _step(self):
         '''
         updates internal state of each grid part
-        This method must update consumed_energy
+        And returns the AC power drawn from the grid
         :return:
         '''
         pass

@@ -5,8 +5,9 @@ import numpy as np
 EFFICIENCY = 0.94
 
 class Storage(GridParticipant):
-    def __init__(self, capacity, soc_initial, dt_step):
-        super().__init__(dt_step=dt_step)
+    def __init__(self, grid, capacity, soc_initial, dt_step):
+        super().__init__(grid)
+        self.dt_step = dt_step
         self.capacity = capacity
         self.stored_energy = capacity * (soc_initial * 0.98 +0.01)
         self.scheduled_power_ac = 0
@@ -16,7 +17,7 @@ class Storage(GridParticipant):
         return self.stored_energy / self.capacity
 
     @abstractmethod
-    def step(self):
+    def _step(self):
         '''
         updates internal state of each grid part
         This method must update consumed_energy
