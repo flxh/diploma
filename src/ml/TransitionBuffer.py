@@ -2,7 +2,7 @@ import numpy as np
 
 
 class Transition:
-    def __init__(self, state=None, action=None, reward=None, next_state=None, done=None, aux_info=None, gae=None):
+    def __init__(self, state=None, action=None, reward=None, next_state=None, done=None, aux_info=None, gae=None, log_prob=None):
         self.state = state
         self.action = action
         self.reward = reward
@@ -10,6 +10,7 @@ class Transition:
         self.aux_info = aux_info
         self.done = done
         self.gae = gae
+        self.log_prob = log_prob
 
 
 class TransitionBuffer(list):
@@ -68,6 +69,10 @@ class TransitionBuffer(list):
     def gae_values(self):
         return np.array([x.gae for x in self])
 
+    @property
+    def log_probs(self):
+        return np.array([x.log_prob for x in self])
+
     def _check_new_value(self, val):
         if not isinstance(val, Transition):
             raise ValueError('Inserted object must be instance of class Transition. ')
@@ -85,4 +90,11 @@ class TransitionBuffer(list):
 
         for idx, gae in enumerate(gae):
             self[idx].gae = gae
+
+    def add_log_probs(self, log_probs):
+        if len(self) != len(log_probs):
+            raise ValueError('Buffer and list of log probs must be equal in length!')
+
+        for idx, lp in enumerate(log_probs):
+            self[idx].log_prob = lp
 

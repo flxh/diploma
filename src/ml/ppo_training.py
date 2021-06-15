@@ -14,7 +14,7 @@ import pickle as pkl
 
 from ml.EpisodeCreator import EpisodeLoader
 from ml.TBTrainingLogger import TrainingSummaryCreator
-from ml.PpoCore import Policy, StateValueApproximator
+from ml.PpoCore import Policy, StateValueApproximator, PPOAgent
 from simulation.Environment import Environment, INFO_HEADER
 from ml.TBStateLogger import StateLogger
 
@@ -27,16 +27,16 @@ np.random.seed(2)
 
 #TODO TRANSFORMTHIS TO DICT
 HP = {
+    'ALPHA_VALUE':2.,
     'BATCH_SIZE': 4096,
     'N_WORKERS': 256,
-    'ENV_STEPS': 256,
+    'ENV_STEPS': 512,
     'TAIL_LEN': 96,
-    'CELLS': 150,
+    'CELLS': 90,
     'GRADIENT_NORM': 10.,
     'KERNEL_REG': 0.,
     'BETA': 0.005,
     'LR_POLICY': 1e-4,
-    'LR_VS': 2e-4,
     'EPSILON': 0.15,
     'GAMMA' : 0.998,
     'LAMBDA' : 0.9,
@@ -80,7 +80,7 @@ class Worker:
     # TODO check if can be made private and called automatically
     def start_episode(self):
         episode_container = self._next_episode()
-        self.env = Environment(HP['TAIL_LEN'], episode_container, DT_SIM_STEP, sim_steps_per_action=SIM_STEPS_PER_ACTION)
+        self.env = Environment(HP['TAIL_LEN'], episode_container, DT_SIM_STEP, sim_steps_per_action=SIM_STEPS_PER_ACTION, balance_pdiff=True)
 
         self.temp_buffer.clear()
 
@@ -147,7 +147,7 @@ def calculate_gae(transition_buffer, vs):
     next_states = transition_buffer.next_states
 
     stacked_states = np.vstack((states, next_states))
-    stacked_values, _ = vs.predict(stacked_states)
+    stacked_values, _ = vs.predict_value(stacked_states)
 
     state_values = stacked_values[:len(states)]
     next_state_values = stacked_values[len(states):]
@@ -217,7 +217,7 @@ if __name__ == '__main__':
         params = np.genfromtxt(f'{sys.argv[3]}', delimiter=';', skip_header=1)
         HP['GAMMA'] = params[PARAM_SET,0]
         HP['LR_POLICY'] = params[PARAM_SET,2]
-        HP['LR_VS'] = params[PARAM_SET,2] * 2
+        HP['LR_VS'] = params[PARAM_SET,2] * HP['ALPHA_VALUE']
         HP['BETA'] = params[PARAM_SET,1]
 
     for x in HP.items():
@@ -251,11 +251,13 @@ if __name__ == '__main__':
     with tf.Session(config=config) as sess:
         now = datetime.now()
 
-        vs = StateValueApproximator(sess, state_dim, HP['LR_VS'], HP['TAIL_LEN'], HP['CELLS'], HP['GAMMA'], HP['KERNEL_REG'])
-        pol = Policy(sess, state_dim, action_dim, HP['LR_POLICY'], HP['TAIL_LEN'], HP['CELLS'],  HP['BETA'], HP['LOG_VAR_INIT'], HP['EPSILON'], HP['KERNEL_REG'], HP['GRADIENT_NORM'])
+        #vs = StateValueApproximator(sess, state_dim, HP['LR_VS'], HP['TAIL_LEN'], HP['CELLS'], HP['GAMMA'], HP['KERNEL_REG'])
+        #pol = Policy(sess, state_dim, action_dim, HP['LR_POLICY'], HP['TAIL_LEN'], HP['CELLS'],  HP['BETA'], HP['LOG_VAR_INIT'], HP['EPSILON'], HP['KERNEL_REG'], HP['GRADIENT_NORM'])
+        ppoa = PPOAgent(sess, state_dim, action_dim, HP['LR_POLICY'],  HP['GAMMA'], HP['TAIL_LEN'], HP['CELLS'],  HP['BETA'], HP['ALPHA_VALUE'],  HP['LOG_VAR_INIT'], HP['EPSILON'], HP['KERNEL_REG'], HP['GRADIENT_NORM'])
         state_logger = StateLogger(sess, ['SOC', 'LOAD', 'PV', 'CYCLE'], "state")
         state_logger_norm = StateLogger(sess,  ['SOC', 'LOAD', 'PV', 'CYCLE'], "norm_state")
         t_summary_creator = TrainingSummaryCreator(sess)
+
 
         if not os.path.isfile(runs_file):
             with open(runs_file, 'a') as file:
@@ -304,7 +306,7 @@ if __name__ == '__main__':
                         if w.done: w.start_episode()
                         states.append(w.state)
 
-                    determ_actions, actions, policy_iteration = pol.sample_action(states)
+                    determ_actions, actions, policy_iteration = ppoa.sample_action(states)
 
                     tr_actions = list(actions[:HP['N_WORKERS']])
                     ev_actions = list(determ_actions[HP['N_WORKERS']:])
@@ -327,8 +329,12 @@ if __name__ == '__main__':
                 # calculate gae values from transitions and extend training buffer
                 for h_buf in horizon_buffers:
                     total_transitions_training += len(h_buf)
-                    gae_vals = calculate_gae(h_buf, vs)
+                    #gae_vals = calculate_gae(h_buf, vs)
+                    gae_vals = calculate_gae(h_buf, ppoa)
                     h_buf.add_gea_values(gae_vals)
+
+                    log_probs = ppoa.log_probs(h_buf.states, h_buf.actions)
+                    h_buf.add_log_probs(log_probs)
                     training_buffer += h_buf
 
                 print('Average horizon length ', total_transitions_training / len(horizon_buffers))
@@ -352,13 +358,17 @@ if __name__ == '__main__':
 
                             i_policy_iter += 1
 
-                            pol_summaries = pol.train_policy(
+                            pol_summaries = ppoa.train(
                                 batch.states,
                                 batch.actions,
-                                batch.gae_values
+                                batch.rewards,
+                                batch.next_states,
+                                batch.gae_values,
+                                batch.log_probs
                             )
                             writer.add_summary(pol_summaries, i_policy_iter)
 
+                            '''
                             if i_epoch < HP['K_EPOCHS_VS']:
                                 v_summaries = vs.train(
                                     batch.states,
@@ -366,7 +376,7 @@ if __name__ == '__main__':
                                     batch.next_states
                                 )
                                 writer.add_summary(v_summaries, i_policy_iter)
-
+                            '''
                     # LOGGING
                     if eval_buffer:
                         eval_summary = ev_summ_creator.create_summary(eval_buffer.rewards, eval_buffer.aux_info)
@@ -390,5 +400,6 @@ if __name__ == '__main__':
                     print('Save model')
                     saver.save(sess, model_path+f"{RUN_ID}")
 
-                    pol.update_old_policy()
+                    #pol.update_old_policy()
+                    #ppoa.update_old_policy()
                     training_buffer.clear()

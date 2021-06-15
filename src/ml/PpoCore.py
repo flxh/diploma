@@ -8,6 +8,189 @@ STATE_VAR = tf.constant([6.0812939e-02, 1.2899629e+11, 6.3592917e+11, 0.5])
 
 # TODO shared LSTM memory different heads
 
+class PPOAgent:
+    def __init__(self, sess, state_size, action_size, lr, gamma, tail_len, cells, beta_entropy, alpha_value_net, log_var_init, epsilon, kernel_reg, gradient_norm):
+        self.sess = sess
+        self.action_size = action_size
+        self.kernel_reg = kernel_reg
+        self.log_var_init = log_var_init
+
+        self.policy_iteration = 0
+
+        self.gamma = tf.constant(gamma, dtype=tf.float32)
+
+        with tf.variable_scope('Input'):
+            self.next_state_ph = tf.placeholder(tf.float32, [None, tail_len,state_size], name="next_state_ph")
+            self.reward_ph = tf.placeholder(tf.float32, [None], name="reward_ph")
+            self.state_ph = tf.placeholder(tf.float32, [None, tail_len, state_size], name="state_ph")
+            self.action_ph = tf.placeholder(tf.float32, [None, action_size], name="action_ph")
+            self.advantage_ph = tf.placeholder(tf.float32, [None], name="adavantage_ph")
+            self.old_log_probs_ph = tf.placeholder(tf.float32, [None], name="adavantage_ph")
+
+        with tf.variable_scope('Batch_Norm'):
+            self.norm_state = tf.nn.batch_normalization(self.state_ph, STATE_MEAN, STATE_VAR, None, None, 1e-12)
+            self.norm_next_state = tf.nn.batch_normalization(self.next_state_ph, STATE_MEAN, STATE_VAR, None, None, 1e-12)
+            adv_mean, adv_var = tf.nn.moments(self.advantage_ph, axes=[0])
+            self.norm_advantage = tf.nn.batch_normalization(self.advantage_ph, adv_mean, adv_var, None, None, 1e-12)
+
+        with tf.variable_scope('LSTM_current',reuse=None):
+            self.shared_lstm = self._create_model(trainable=True, input=self.norm_state, n_cells=cells, tail_len=tail_len)
+        with tf.variable_scope('LSTM_current',reuse=True):
+            # same model but different IO
+            self.shared_lstm_next = self._create_model(trainable=True, input=self.norm_state, n_cells=cells, tail_len=tail_len)
+
+        with tf.variable_scope("Policy"):
+            with tf.variable_scope("Head_current"):
+                self.pi, self.mean_action = self._create_policy_head(trainable=True, shared_output=self.shared_lstm)
+                self.sample_op = self.pi.sample()
+                tf.summary.histogram('sampled_actions', self.sample_op)
+
+            with tf.variable_scope('log_prob'):
+                self.log_prob = self.pi.log_prob(self.action_ph)
+
+            with tf.variable_scope("loss"):
+                prob_ratio = tf.exp(self.log_prob - self.old_log_probs_ph)
+                tf.summary.histogram('prob_ratios', prob_ratio)
+
+                surrogate = prob_ratio * self.norm_advantage
+                clipped_surrogate = tf.minimum(surrogate,  tf.clip_by_value(prob_ratio, 1.-epsilon, 1.+epsilon)*self.norm_advantage)
+
+                self.pi_entropy = tf.reduce_mean(self.pi.entropy())  # sum over action space then mean
+                self.surrogate = tf.reduce_mean(clipped_surrogate)
+                self.action_reg_loss = tf.reduce_mean(self.mean_action**2)
+
+                tf.summary.scalar("entropy", self.pi_entropy)
+                tf.summary.scalar('surrogate', self.surrogate)
+                tf.summary.scalar('action_reg', self.action_reg_loss)
+
+                self.policy_loss = -self.surrogate - beta_entropy * self.pi_entropy + 0.033*self.action_reg_loss # maximise surrogate and entropy
+
+                tf.summary.scalar("objective", self.policy_loss)
+
+        with tf.variable_scope("V_s"):
+            with tf.variable_scope("Head", reuse=None):
+                self.value_output = self._create_value_head(self.shared_lstm)
+            with tf.variable_scope("Head", reuse=True):
+                #same head but different IO
+                self.next_value_output = self._create_value_head(self.shared_lstm_next)
+
+            with tf.variable_scope("loss"):
+                self.diff = self.value_output - self.reward_ph - self.gamma * tf.stop_gradient(self.next_value_output)
+                self.value_loss = tf.reduce_mean(tf.square(self.diff)) # MSE
+                self.loss_summary = tf.summary.scalar("mean_error", tf.reduce_mean(tf.abs(self.diff)))
+                self.mean_predict_summary = tf.summary.scalar("mean_prediction", tf.reduce_mean(self.value_output))
+
+        with tf.variable_scope("Training"):
+            total_loss = alpha_value_net * self.value_loss + self.policy_loss
+            trainable_variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
+            self.gradients = tf.gradients(total_loss, trainable_variables)
+            #self.gradients = [tf.clip_by_value(g, -1, 1) for g in self.gradients]
+            self.gradients, _ = tf.clip_by_global_norm(self.gradients, gradient_norm)
+            grads = zip(self.gradients, trainable_variables)
+            optimizer = tf.train.RMSPropOptimizer(lr)
+
+            clipped_grads_tb = [tf.clip_by_value(g, -1e-8, 1e-8) for g in self.gradients]
+            for g, v in zip(clipped_grads_tb, trainable_variables):
+                tf.summary.histogram(v.name.split(":")[0]+"_grad", g)
+            self.optimize = optimizer.apply_gradients(grads)
+
+        policy_summaries = tf.summary.merge_all(scope="Policy")
+        vs_summaries = tf.summary.merge_all(scope="V_s")
+        lstm_summaries = tf.summary.merge_all(scope="LSTM")
+        training_summaries = tf.summary.merge_all(scope="Training")
+
+        self.summary_op = tf.summary.merge([policy_summaries, vs_summaries, lstm_summaries, training_summaries])
+
+    def _create_policy_head(self, trainable, shared_output):
+        layer_names = ['ph_d0','ph_d1','ph_d2']
+        d_ph_0 = tf.layers.Dense(shared_output.shape[1], activation="relu", name=layer_names[0], trainable=trainable, kernel_initializer = tf.initializers.he_normal(), kernel_regularizer=tf.contrib.layers.l2_regularizer(scale=self.kernel_reg))(shared_output)
+        d_ph_1 = tf.layers.Dense(shared_output.shape[1], activation="relu", name=layer_names[1], trainable=trainable, kernel_initializer = tf.initializers.he_normal(), kernel_regularizer=tf.contrib.layers.l2_regularizer(scale=self.kernel_reg))(d_ph_0)
+        mu = tf.layers.Dense(self.action_size, activation="tanh", name=layer_names[2], trainable=trainable, kernel_initializer = tf.initializers.he_normal(), kernel_regularizer=tf.contrib.layers.l2_regularizer(scale=self.kernel_reg))(d_ph_1)
+
+        log_sigma = tf.Variable(initial_value=tf.fill((self.action_size,), self.log_var_init), trainable=trainable, name="log_sigma")
+        #log_sigma = tf.constant([1.])
+
+        distribution = tfp.distributions.MultivariateNormalDiag(loc=mu, scale_diag=tf.exp(log_sigma))
+
+        if trainable:
+            tf.summary.histogram("log_sigma", log_sigma)
+            tf.summary.histogram("mu", mu)
+            mean_mu, var_mu = tf.nn.moments(tf.reshape(mu, (-1,)), axes=[0])
+            tf.summary.scalar("mu_mean", mean_mu)
+            tf.summary.scalar("mu_var", var_mu)
+
+            for name in layer_names:
+                with tf.variable_scope(name, reuse=True):
+                    tf.summary.histogram("kernel", tf.get_variable("kernel"))
+                    tf.summary.histogram("bias", tf.get_variable("bias"))
+
+        return distribution, mu
+
+    def _create_value_head(self, shared_output):
+        layer_names = ['vh_d0','vh_d1','vh_d2']
+        d_vh_0 = tf.layers.Dense(shared_output.shape[1], activation="relu", name=layer_names[0], kernel_initializer = tf.initializers.he_normal(), kernel_regularizer=tf.contrib.layers.l2_regularizer(scale=self.kernel_reg))(shared_output)
+        d_vh_1 = tf.layers.Dense(shared_output.shape[1], activation="relu", name=layer_names[1], kernel_initializer = tf.initializers.he_normal(), kernel_regularizer=tf.contrib.layers.l2_regularizer(scale=self.kernel_reg))(d_vh_0)
+        value_output = tf.layers.Dense(1, activation="linear", name=layer_names[2], kernel_initializer = tf.initializers.he_normal(), kernel_regularizer=tf.contrib.layers.l2_regularizer(scale=self.kernel_reg))(d_vh_1)
+
+        for name in layer_names:
+            with tf.variable_scope(name, reuse=True):
+                tf.summary.histogram("kernel", tf.get_variable("kernel"))
+                tf.summary.histogram("bias", tf.get_variable("bias"))
+
+        return tf.reshape(value_output, (-1,))
+
+    def _create_model(self, trainable, input, n_cells, tail_len):
+        layer_names = ["lstm"]
+
+        lstm = tf.nn.rnn_cell.LSTMCell(n_cells, name=layer_names[0], trainable=trainable)
+        batch_size = tf.shape(input)[0]
+
+        state = lstm.zero_state(batch_size, dtype=tf.float32)
+        output = None
+        for i in range(tail_len):
+            output, state = lstm(input[:,i,:], state)
+
+        if trainable:
+            for name in layer_names:
+                with tf.variable_scope(name, reuse=True):
+                    tf.summary.histogram("kernel", tf.get_variable("kernel"))
+                    tf.summary.histogram("bias", tf.get_variable("bias"))
+
+        return output
+
+    def sample_action(self, state):
+        mean_action, sampled_action =  self.sess.run([self.mean_action, self.sample_op], feed_dict={
+            self.state_ph: state
+        })
+        return mean_action, sampled_action, self.policy_iteration
+
+    def train(self, states, actions, rewards, next_states, advantages, old_log_probs):
+        _, summaries =self.sess.run([self.optimize, self.summary_op], feed_dict={
+            self.state_ph:states,
+            self.action_ph: actions,
+            self.advantage_ph: advantages,
+            self.next_state_ph: next_states,
+            self.reward_ph: rewards,
+            self.old_log_probs_ph: old_log_probs
+        })
+        self.policy_iteration += 1
+        return summaries
+
+    # def update_old_policy(self):
+    #    self.sess.run(self.update_oldpi_op)
+
+    def log_probs(self, states, actions):
+        return self.sess.run(self.log_prob, feed_dict={
+            self.state_ph: states,
+            self.action_ph: actions
+        })
+
+    def predict_value(self, states):
+        return self.sess.run([self.value_output, self.norm_state] , feed_dict={
+            self.state_ph: states
+        })
+
+
 class Policy:
 
     def __init__(self, sess, state_size, action_size, lr, tail_len, cells, beta_entropy, log_var_init, epsilon, kernel_reg, gradient_norm):
@@ -34,6 +217,7 @@ class Policy:
             with tf.variable_scope("pi"):
                 self.pi, self.mean_action = self._create_model(trainable=True, input=self.norm_state, n_cells=cells, tail_len=tail_len)
                 self.pi_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope="Policy/pi")
+
                 self.sample_op = self.pi.sample()
                 tf.summary.histogram('sampled_actions', self.sample_op)
 
@@ -56,7 +240,7 @@ class Policy:
                 tf.summary.scalar('surrogate', self.surrogate)
                 tf.summary.scalar('action_reg', self.action_reg_loss)
 
-                self.loss = -self.surrogate - beta_entropy * self.pi_entropy + 0.033*self.action_reg_loss # maximise surrogate and entropy
+                self.loss = -self.surrogate - beta_entropy * self.pi_entropy # + 0.033*self.action_reg_loss # maximise surrogate and entropy
 
                 tf.summary.scalar("objective", self.loss)
 
